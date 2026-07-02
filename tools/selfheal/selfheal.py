@@ -611,6 +611,14 @@ def main():
 
     args = parser.parse_args()
     load_env_file()
+    # When stdout isn't a TTY (piped/redirected to a file), Python fully-buffers it,
+    # which reorders our print() output relative to the unbuffered subprocess output
+    # (git/gh/agent) sharing the same fd. Force line-buffering so logs interleave
+    # in the order things actually happened.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     try:
         args.func(args)
     except KeyboardInterrupt:
