@@ -50,8 +50,11 @@ def load_env_file():
             pass
 
 # 各 agent CLI 的调用方式（argv 模板，{prompt} 会被替换为完整提示词）
+# 注意：codex exec 会在检测到 stdin 被重定向（非 TTY）时尝试读取额外输入直到 EOF，
+# 即使已提供 prompt 参数；run_agent() 会显式把 stdin 接到 /dev/null 避免挂起。
+# --full-auto 已废弃，现用 -s workspace-write。
 AGENTS = {
-    "codex": ["codex", "exec", "--full-auto", "{prompt}"],
+    "codex": ["codex", "exec", "-s", "workspace-write", "{prompt}"],
     "cursor": ["cursor-agent", "-p", "{prompt}"],
 }
 
@@ -394,7 +397,10 @@ def run_agent(agent: str, prompt: str) -> int:
     template = AGENTS[agent]
     argv = [prompt if part == "{prompt}" else part for part in template]
     info(f"running agent: {' '.join(argv[:-1])} <prompt>")
-    cp = run(argv, check=False, capture=False)
+    # stdin must be closed/redirected: some agent CLIs (e.g. codex exec) detect a
+    # non-TTY stdin and block reading extra input until EOF even when a prompt
+    # argument is given, which hangs forever under subprocess otherwise.
+    cp = subprocess.run(argv, stdin=subprocess.DEVNULL, check=False)
     return cp.returncode
 
 
