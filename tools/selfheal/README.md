@@ -24,20 +24,26 @@ Render API /v1/logs  ->  group issues  ->  you pick  ->  agent fixes on a branch
 3. Already required and present in this environment:
    - `gh` authenticated (`gh auth status`) — used to open PRs against the repo remote.
    - A coding agent CLI: **`codex`** (default) or `cursor-agent`.
-   - `uv` — to run the script.
+   - Python 3 — the script is stdlib-only, no venv/deps needed to run it.
 
 ## Usage
 
+Run from the repo root with plain `python3` (no `uv`/venv required — the script only
+uses the standard library):
+
 ```bash
-# 1. Connect the Render service and check your environment
-uv run tools/selfheal/selfheal.py setup
+# 1. Connect the Render service and check your environment (once)
+python3 tools/selfheal/selfheal.py setup
 
 # 2. Look at recent errors (read-only, no changes)
-uv run tools/selfheal/selfheal.py logs --since 6h
+python3 tools/selfheal/selfheal.py logs --since 6h
 
 # 3. Fix interactively: pick issues, review each diff, open PRs
-uv run tools/selfheal/selfheal.py run --since 6h
+python3 tools/selfheal/selfheal.py run --since 6h
 ```
+
+(`uv run tools/selfheal/selfheal.py ...` also works if you prefer running it inside the
+backend's project environment, but it's not required.)
 
 ### `run` flags
 - `--since 30m|6h|2d` — time window to pull logs for (default `6h`).
@@ -70,7 +76,17 @@ uv run tools/selfheal/selfheal.py run --since 6h
 ## Notes / tuning
 
 - Agent invocation templates live in the `AGENTS` dict at the top of `selfheal.py` if you
-  need to adjust flags for your `codex` / `cursor-agent` version.
+  need to adjust flags for your `codex` / `cursor-agent` version (e.g. if a future
+  `codex` release renames `-s workspace-write` again). The agent subprocess's stdin is
+  always redirected to `/dev/null` — some agent CLIs otherwise block forever waiting for
+  input that will never come.
 - If Render changes log query parameters, adjust `fetch_logs()`.
 - Optional future step: a `--watch` mode that re-polls after redeploy to confirm the
   error cleared (a true self-iterating loop).
+
+## Verified
+
+Run end-to-end against the live `bookmiro-backend` deployment: pulled logs, grouped a
+recurring `uv`/`VIRTUAL_ENV` build warning into one issue, ran `codex exec`, and opened
+a real PR with the fix (`uv sync --active --frozen` / `uv run --active gunicorn`) against
+`render.yaml`.
