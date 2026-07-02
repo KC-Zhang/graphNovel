@@ -38,9 +38,14 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     envVars:
-      # Set to the backend's public URL, e.g. https://api.your-domain.com
+      # Auto-filled with the backend's Render host (no scheme); the frontend adds https://.
+      # To route the frontend at a custom backend domain instead, override this with a full URL
+      # (e.g. https://api.your-domain.com) in the dashboard and redeploy.
       - key: VITE_API_BASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: bookmiro-backend
+          property: host
     routes:
       # SPA fallback for Vue Router history mode
       - type: rewrite

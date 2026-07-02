@@ -1,9 +1,13 @@
 import axios from 'axios'
 import i18n from '../i18n'
 
+// VITE_API_BASE_URL 可能是完整 URL（自定义域名）或裸主机名（Render fromService 注入），后者补全 https://
+const rawBaseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001'
+const baseURL = /^https?:\/\//.test(rawBaseURL) ? rawBaseURL : `https://${rawBaseURL}`
+
 // 创建axios实例
 const service = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001',
+  baseURL,
   timeout: 300000, // 5分钟超时（本体生成可能需要较长时间）
   headers: {
     'Content-Type': 'application/json'
