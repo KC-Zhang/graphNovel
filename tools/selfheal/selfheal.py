@@ -362,6 +362,32 @@ def slugify(text: str, maxlen: int = 40) -> str:
     return (s or "issue")[:maxlen].strip("-")
 
 
+def branch_exists_locally(branch: str) -> bool:
+    cp = run(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+             check=False, capture=True)
+    return cp.returncode == 0
+
+
+def find_open_pr_for_slug(slug: str) -> str | None:
+    """
+    若已有一个 selfheal 分支（同一问题 slug，忽略日期前缀）存在开放 PR，返回其 URL。
+    用于避免同一个尚未修复/合并的问题被重复开 PR。
+    """
+    cp = run(["gh", "pr", "list", "--state", "open", "--json", "headRefName,url"],
+              check=False, capture=True)
+    if cp.returncode != 0:
+        return None
+    try:
+        prs = json.loads(cp.stdout or "[]")
+    except Exception:
+        return None
+    for pr in prs:
+        head = pr.get("headRefName", "")
+        if head.startswith("selfheal/") and head.endswith(slug):
+            return pr.get("url")
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # agent
 # --------------------------------------------------------------------------- #
@@ -474,11 +500,29 @@ def cmd_logs(args):
 
 def _fix_issue(issue: dict, agent: str, base: str, auto: bool) -> str | None:
     slug = slugify(issue["signature"])
-    branch = f"selfheal/{datetime.now().strftime('%Y%m%d')}-{slug}"
 
-    info(f"branch {branch}")
-    git("switch", "-c", branch, capture=False)
+    # 同一问题（同 slug）若已有开放 PR，说明上次运行已经提过修复，跳过避免重复开 PR
+    existing = find_open_pr_for_slug(slug)
+    if existing:
+        print(yellow(f"issue already has an open PR, skipping: {existing}"))
+        return existing
+
+    branch = f"selfheal/{datetime.now().strftime('%Y%m%d')}-{slug}"
+    branch_created = False
+
     try:
+        if branch_exists_locally(branch):
+            # 大概率是之前运行中途失败留下的、没有对应 PR 的残留分支：清理后重建
+            print(yellow(f"stale local branch {branch} found (no open PR) - removing it first"))
+            git("branch", "-D", branch, check=False)
+
+        info(f"branch {branch}")
+        cp = run(["git", "switch", "-c", branch], check=False, capture=True)
+        if cp.returncode != 0:
+            print(red(f"could not create branch {branch}:\n{(cp.stderr or '').strip()}"))
+            return None
+        branch_created = True
+
         rc = run_agent(agent, build_prompt(issue))
         if rc != 0:
             print(yellow(f"agent exited with code {rc}"))
@@ -486,8 +530,6 @@ def _fix_issue(issue: dict, agent: str, base: str, auto: bool) -> str | None:
         changed = git("status", "--porcelain")
         if not changed:
             print(yellow("agent made no changes - skipping this issue."))
-            git("switch", base, capture=False)
-            git("branch", "-D", branch, capture=False)
             return None
 
         print(bold("\n--- proposed diff ---"))
@@ -498,20 +540,26 @@ def _fix_issue(issue: dict, agent: str, base: str, auto: bool) -> str | None:
             ok = input("Open a PR for this fix? [y/N] ").strip().lower()
             if ok != "y":
                 print(yellow("discarded. reverting branch."))
-                git("checkout", "--", ".", capture=False)
-                git("switch", base, capture=False)
-                git("branch", "-D", branch, capture=False)
+                git("checkout", "--", ".", check=False)
                 return None
 
-        git("add", "-A", capture=False)
+        git("add", "-A", check=False)
         title = f"fix: {issue['signature'][:70]}"
         body = (
             "Automated fix proposed by selfheal.\n\n"
             f"Occurrences: {issue['count']} (last seen {issue['last_seen']})\n\n"
             "```\n" + issue["excerpt"][:1500] + "\n```\n"
         )
-        git("commit", "-m", title, "-m", body, capture=False)
-        git("push", "-u", "origin", branch, capture=False)
+        commit_cp = run(["git", "commit", "-m", title, "-m", body], check=False, capture=True)
+        if commit_cp.returncode != 0:
+            print(red("git commit failed:\n" + (commit_cp.stderr or commit_cp.stdout or "")))
+            return None
+        print((commit_cp.stdout or "").strip())
+        push_cp = run(["git", "push", "-u", "origin", branch], check=False, capture=True)
+        if push_cp.returncode != 0:
+            print(red("git push failed:\n" + (push_cp.stderr or "")))
+            return None
+        print((push_cp.stderr or push_cp.stdout or "").strip())
         cp = run(["gh", "pr", "create", "--title", title, "--body", body,
                   "--base", base, "--head", branch], check=False, capture=True)
         url = (cp.stdout or "").strip()
@@ -521,11 +569,20 @@ def _fix_issue(issue: dict, agent: str, base: str, auto: bool) -> str | None:
             print(red("gh pr create failed:\n" + (cp.stderr or "")))
             url = None
         return url
+    except Exception as e:
+        print(red(f"unexpected error while fixing this issue, skipping: {e}"))
+        return None
     finally:
-        # 回到基础分支，便于处理下一个问题
+        # 回到基础分支，便于处理下一个问题；若分支未产生任何已提交的改动则一并清理
         cur = git("rev-parse", "--abbrev-ref", "HEAD", check=False)
-        if cur != base:
+        if cur == branch:
             git("switch", base, capture=False, check=False)
+        if branch_created and branch_exists_locally(branch):
+            # 分支存在但没有被推送/合入 PR 的 commit，说明流程半途而废，清理掉避免下次撞名
+            merge_base = git("merge-base", base, branch, check=False)
+            branch_tip = git("rev-parse", branch, check=False)
+            if merge_base and branch_tip and merge_base == branch_tip:
+                git("branch", "-D", branch, check=False)
 
 
 def cmd_run(args):
