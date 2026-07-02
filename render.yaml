@@ -1,0 +1,48 @@
+# Render Blueprint for BookMiro
+# Backend: single-process Flask + gunicorn with a persistent disk for uploaded books.
+# Frontend: static Vue build served with SPA rewrites.
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: bookmiro-backend
+    runtime: python
+    rootDir: backend
+    plan: starter # paid: free instances sleep (killing extraction) and cannot mount a disk
+    buildCommand: pip install uv && uv sync --frozen
+    # -w 1 is REQUIRED: ExtractionManager keeps progress in memory with background threads.
+    startCommand: uv run gunicorn -w 1 --threads 8 -t 600 -b 0.0.0.0:$PORT "app:create_app()"
+    healthCheckPath: /health
+    disk:
+      name: bookmiro-uploads
+      mountPath: /var/data/uploads
+      sizeGB: 1
+    envVars:
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: UPLOAD_FOLDER
+        value: /var/data/uploads
+      - key: SECRET_KEY
+        generateValue: true
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL_NAME
+        sync: false
+
+  - type: web
+    name: bookmiro-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # Set to the backend's public URL, e.g. https://api.your-domain.com
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      # SPA fallback for Vue Router history mode
+      - type: rewrite
+        source: /*
+        destination: /index.html

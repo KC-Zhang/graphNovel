@@ -1,27 +1,22 @@
 [project]
-name = "mirofish-backend"
+name = "bookmiro-backend"
 version = "0.1.0"
-description = "MiroFish - 简洁通用的群体智能引擎，预测万物"
+description = "BookMiro - 把书读成随阅读进度展开的知识图谱"
 requires-python = ">=3.11,<3.13"
 license = { text = "AGPL-3.0" }
 authors = [
-    { name = "MiroFish Team" }
+    { name = "BookMiro Team" }
 ]
 
 dependencies = [
     # 核心框架
     "flask>=3.0.0",
     "flask-cors>=6.0.0",
+    # 生产环境 WSGI 服务器
+    "gunicorn>=23.0.0",
     
     # LLM 相关
     "openai>=1.0.0",
-    
-    # Zep Cloud
-    "zep-cloud==3.13.0",
-    
-    # OASIS 社交媒体模拟
-    "camel-oasis==0.2.5",
-    "camel-ai==0.2.78",
     
     # 文件处理
     "PyMuPDF>=1.24.0",

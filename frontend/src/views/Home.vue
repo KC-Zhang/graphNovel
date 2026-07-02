@@ -2,10 +2,10 @@
   <div class="home-container">
     <!-- 顶部导航栏 -->
     <nav class="navbar">
-      <div class="nav-brand">MIROFISH</div>
+      <div class="nav-brand">BOOKMIRO</div>
       <div class="nav-links">
         <LanguageSwitcher />
-        <a href="https://github.com/666ghj/MiroFish" target="_blank" class="github-link">
+        <a href="https://github.com/KC-Zhang/BookMiro" target="_blank" class="github-link">
           {{ $t('nav.visitGithub') }} <span class="arrow">↗</span>
         </a>
       </div>
@@ -36,6 +36,13 @@
             <p class="slogan-text">
               {{ $t('home.slogan') }}<span class="blinking-cursor">_</span>
             </p>
+            <p class="attribution">
+              <i18n-t keypath="home.attribution" tag="span">
+                <template #link>
+                  <a href="https://github.com/KC-Zhang/graphNovel" target="_blank" rel="noopener">MiroFish</a>
+                </template>
+              </i18n-t>
+            </p>
           </div>
            
           <div class="decoration-square"></div>
@@ -44,7 +51,7 @@
         <div class="hero-right">
           <!-- Logo 区域 -->
           <div class="logo-container">
-            <img src="../assets/logo/MiroFish_logo_left.jpeg" alt="MiroFish Logo" class="hero-logo" />
+            <img src="../assets/logo/BookMiro_logo.png" alt="BookMiro Logo" class="hero-logo" />
           </div>
           
           <button class="scroll-down-btn" @click="scrollToBottom">
@@ -172,20 +179,18 @@
               <span>{{ $t('home.inputParams') }}</span>
             </div>
 
-            <!-- 输入区域 -->
+            <!-- 书名输入 -->
             <div class="console-section">
               <div class="console-header">
-                <span class="console-label">{{ $t('home.simulationPrompt') }}</span>
+                <span class="console-label">{{ $t('home.bookNameLabel') }}</span>
               </div>
               <div class="input-wrapper">
-                <textarea
-                  v-model="formData.simulationRequirement"
-                  class="code-input"
-                  :placeholder="$t('home.promptPlaceholder')"
-                  rows="6"
+                <input
+                  v-model="formData.bookName"
+                  class="code-input book-name-input"
+                  :placeholder="$t('home.bookNamePlaceholder')"
                   :disabled="loading"
-                ></textarea>
-                <div class="model-badge">{{ $t('home.engineBadge') }}</div>
+                />
               </div>
             </div>
 
@@ -193,10 +198,10 @@
             <div class="console-section btn-section">
               <button 
                 class="start-engine-btn"
-                @click="startSimulation"
+                @click="startReading"
                 :disabled="!canSubmit || loading"
               >
-                <span v-if="!loading">{{ $t('home.startEngine') }}</span>
+                <span v-if="!loading">{{ $t('home.startReading') }}</span>
                 <span v-else>{{ $t('home.initializing') }}</span>
                 <span class="btn-arrow">→</span>
               </button>
@@ -221,7 +226,7 @@ const router = useRouter()
 
 // 表单数据
 const formData = ref({
-  simulationRequirement: ''
+  bookName: ''
 })
 
 // 文件列表
@@ -237,7 +242,7 @@ const fileInput = ref(null)
 
 // 计算属性:是否可以提交
 const canSubmit = computed(() => {
-  return formData.value.simulationRequirement.trim() !== '' && files.value.length > 0
+  return files.value.length > 0
 })
 
 // 触发文件选择
@@ -294,17 +299,16 @@ const scrollToBottom = () => {
   })
 }
 
-// 开始模拟 - 立即跳转，API调用在Process页面进行
-const startSimulation = () => {
+// 开始阅读 - 立即跳转，上传/抽取在阅读页进行
+const startReading = () => {
   if (!canSubmit.value || loading.value) return
-  
-  // 存储待上传的数据
+
+  const defaultName = files.value[0]?.name?.replace(/\.[^.]+$/, '') || ''
   import('../store/pendingUpload.js').then(({ setPendingUpload }) => {
-    setPendingUpload(files.value, formData.value.simulationRequirement)
-    
-    // 立即跳转到Process页面（使用特殊标识表示新建项目）
+    setPendingUpload(files.value, formData.value.bookName || defaultName)
+
     router.push({
-      name: 'Process',
+      name: 'Reader',
       params: { projectId: 'new' }
     })
   })
@@ -483,6 +487,23 @@ const startSimulation = () => {
   border-left: 3px solid var(--orange);
   padding-left: 15px;
   margin-top: 20px;
+}
+
+.attribution {
+  margin-top: 16px;
+  font-size: 0.8rem;
+  color: #999;
+  font-family: var(--font-mono);
+}
+
+.attribution a {
+  color: var(--orange);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.attribution a:hover {
+  text-decoration: underline;
 }
 
 .blinking-cursor {
@@ -812,6 +833,12 @@ const startSimulation = () => {
   resize: vertical;
   outline: none;
   min-height: 150px;
+}
+
+.book-name-input {
+  min-height: 0;
+  height: auto;
+  padding: 16px 20px;
 }
 
 .model-badge {

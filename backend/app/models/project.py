@@ -15,11 +15,10 @@ from ..config import Config
 
 
 class ProjectStatus(str, Enum):
-    """项目状态"""
-    CREATED = "created"              # 刚创建，文件已上传
-    ONTOLOGY_GENERATED = "ontology_generated"  # 本体已生成
-    GRAPH_BUILDING = "graph_building"    # 图谱构建中
-    GRAPH_COMPLETED = "graph_completed"  # 图谱构建完成
+    """项目（书籍）状态"""
+    CREATED = "created"              # 刚创建，文件已上传并完成分章
+    GRAPH_BUILDING = "graph_building"    # 图谱抽取中
+    GRAPH_COMPLETED = "graph_completed"  # 图谱抽取完成
     FAILED = "failed"                # 失败
 
 
@@ -36,18 +35,13 @@ class Project:
     files: List[Dict[str, str]] = field(default_factory=list)  # [{filename, path, size}]
     total_text_length: int = 0
     
-    # 本体信息（接口1生成后填充）
-    ontology: Optional[Dict[str, Any]] = None
-    analysis_summary: Optional[str] = None
+    # 书籍信息
+    language: Optional[str] = None  # 检测到的书籍语言（用于图谱语言锁定）
+    episodes: List[Dict[str, Any]] = field(default_factory=list)  # 章节元数据（不含正文）
     
-    # 图谱信息（接口2完成后填充）
-    graph_id: Optional[str] = None
-    graph_build_task_id: Optional[str] = None
-    
-    # 配置
-    simulation_requirement: Optional[str] = None
-    chunk_size: int = 500
-    chunk_overlap: int = 50
+    # 图谱抽取信息
+    extract_task_id: Optional[str] = None
+    extracted_upto: int = -1  # 已抽取到的章节索引（-1 表示尚未抽取）
     
     # 错误信息
     error: Optional[str] = None
@@ -62,13 +56,10 @@ class Project:
             "updated_at": self.updated_at,
             "files": self.files,
             "total_text_length": self.total_text_length,
-            "ontology": self.ontology,
-            "analysis_summary": self.analysis_summary,
-            "graph_id": self.graph_id,
-            "graph_build_task_id": self.graph_build_task_id,
-            "simulation_requirement": self.simulation_requirement,
-            "chunk_size": self.chunk_size,
-            "chunk_overlap": self.chunk_overlap,
+            "language": self.language,
+            "episodes": self.episodes,
+            "extract_task_id": self.extract_task_id,
+            "extracted_upto": self.extracted_upto,
             "error": self.error
         }
     
@@ -87,13 +78,10 @@ class Project:
             updated_at=data.get('updated_at', ''),
             files=data.get('files', []),
             total_text_length=data.get('total_text_length', 0),
-            ontology=data.get('ontology'),
-            analysis_summary=data.get('analysis_summary'),
-            graph_id=data.get('graph_id'),
-            graph_build_task_id=data.get('graph_build_task_id'),
-            simulation_requirement=data.get('simulation_requirement'),
-            chunk_size=data.get('chunk_size', 500),
-            chunk_overlap=data.get('chunk_overlap', 50),
+            language=data.get('language'),
+            episodes=data.get('episodes', []),
+            extract_task_id=data.get('extract_task_id'),
+            extracted_upto=data.get('extracted_upto', -1),
             error=data.get('error')
         )
 
@@ -128,6 +116,16 @@ class ProjectManager:
     def _get_project_text_path(cls, project_id: str) -> str:
         """获取项目提取文本存储路径"""
         return os.path.join(cls._get_project_dir(project_id), 'extracted_text.txt')
+    
+    @classmethod
+    def _get_episodes_path(cls, project_id: str) -> str:
+        """获取章节数据（含正文）存储路径"""
+        return os.path.join(cls._get_project_dir(project_id), 'episodes.json')
+    
+    @classmethod
+    def _get_graph_path(cls, project_id: str) -> str:
+        """获取图谱数据存储路径"""
+        return os.path.join(cls._get_project_dir(project_id), 'graph.json')
     
     @classmethod
     def create_project(cls, name: str = "Unnamed Project") -> Project:
@@ -288,6 +286,38 @@ class ProjectManager:
         
         with open(text_path, 'r', encoding='utf-8') as f:
             return f.read()
+    
+    @classmethod
+    def save_episodes(cls, project_id: str, episodes: List[Dict[str, Any]]) -> None:
+        """保存章节数据（含正文）"""
+        path = cls._get_episodes_path(project_id)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(episodes, f, ensure_ascii=False)
+    
+    @classmethod
+    def get_episodes(cls, project_id: str) -> Optional[List[Dict[str, Any]]]:
+        """读取章节数据（含正文）"""
+        path = cls._get_episodes_path(project_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    
+    @classmethod
+    def save_graph(cls, project_id: str, graph: Dict[str, Any]) -> None:
+        """保存图谱数据"""
+        path = cls._get_graph_path(project_id)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(graph, f, ensure_ascii=False)
+    
+    @classmethod
+    def get_graph(cls, project_id: str) -> Optional[Dict[str, Any]]:
+        """读取图谱数据"""
+        path = cls._get_graph_path(project_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
     
     @classmethod
     def get_project_files(cls, project_id: str) -> List[str]:
