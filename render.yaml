@@ -9,9 +9,9 @@ services:
     runtime: python
     rootDir: backend
     plan: starter # paid: free instances sleep (killing extraction) and cannot mount a disk
-    buildCommand: pip install uv && uv sync --frozen
+    buildCommand: pip install uv && uv sync --active --frozen
     # -w 1 is REQUIRED: ExtractionManager keeps progress in memory with background threads.
-    startCommand: uv run gunicorn -w 1 --threads 8 -t 600 -b 0.0.0.0:$PORT "app:create_app()"
+    startCommand: uv run --active gunicorn -w 1 --threads 8 -t 600 -b 0.0.0.0:$PORT "app:create_app()"
     healthCheckPath: /health
     disk:
       name: bookmiro-uploads
