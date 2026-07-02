@@ -1,7 +1,8 @@
 import axios from 'axios'
 import i18n from '../i18n'
 
-// VITE_API_BASE_URL 可能是完整 URL（自定义域名）或裸主机名（Render fromService 注入），后者补全 https://
+// VITE_API_BASE_URL 应为完整 URL（如 render.yaml 中配置的后端公网地址）；
+// 兼容误配为裸主机名的情况，此时自动补全 https://
 const rawBaseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001'
 const baseURL = /^https?:\/\//.test(rawBaseURL) ? rawBaseURL : `https://${rawBaseURL}`
 

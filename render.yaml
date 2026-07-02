@@ -38,14 +38,16 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     envVars:
-      # Auto-filled with the backend's Render host (no scheme); the frontend adds https://.
-      # To route the frontend at a custom backend domain instead, override this with a full URL
-      # (e.g. https://api.your-domain.com) in the dashboard and redeploy.
+      # NOTE: this must be the backend's PUBLIC onrender.com URL, not a fromService/property:host
+      # reference. fromService "host"/"hostport" give the *private network* hostname, which only
+      # resolves between Render services and is unreachable from a browser running this static
+      # site's JS (see https://render.com/docs/blueprint-spec - "Web services and private
+      # services only" / static sites can't send or receive private network traffic). Using
+      # fromService here previously caused ERR_NAME_NOT_RESOLVED for every API call in the browser.
+      # If you rename the bookmiro-backend service, update this URL to match (or point it at a
+      # custom domain instead).
       - key: VITE_API_BASE_URL
-        fromService:
-          type: web
-          name: bookmiro-backend
-          property: host
+        value: https://bookmiro-backend.onrender.com
     routes:
       # SPA fallback for Vue Router history mode
       - type: rewrite

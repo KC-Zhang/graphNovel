@@ -207,7 +207,9 @@ def fetch_logs(cfg: dict, since: str, levels: list[str], types: list[str],
     }
     for _ in range(max_pages):
         out = render_get("/logs", params)
-        batch = (out or {}).get("logs", [])
+        # Render 在没有匹配日志时会返回 {"logs": null, ...} 而不是 {"logs": []}，
+        # .get(key, default) 的 default 只在 key 缺失时生效，对显式 null 无效，需额外用 `or []` 兜底。
+        batch = (out or {}).get("logs") or []
         logs.extend(batch)
         if not (out or {}).get("hasMore"):
             break
