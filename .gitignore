@@ -58,3 +58,6 @@ backend/uploads/
 
 # Docker 数据
 data/
+
+# selfheal 本地配置（含 Render 服务/owner id，非密钥）
+tools/selfheal/config.json

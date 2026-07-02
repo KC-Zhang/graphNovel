@@ -202,6 +202,10 @@ const seenEdgeSet = computed(() => new Set(props.seenEdges))
 
 const COLORS = ['#FF6B35', '#004E89', '#7B2D8E', '#1A936F', '#C5283D', '#E9724C', '#3498db', '#9b59b6', '#27ae60', '#f39c12']
 
+// 高亮配色：选中节点/相连边用 ACCENT，正在走查的边用 ACTIVE（更醒目）
+const HL_ACCENT = '#E91E63'
+const HL_ACTIVE = '#FF4500'
+
 // 位置缓存，保证逐章展开时已有节点位置稳定
 const positionCache = new Map()
 
@@ -376,14 +380,25 @@ const highlightEdge = (edgeId) => {
   }
 }
 
-const highlightNode = (nodeId) => {
+const highlightNode = (nodeId, activeEdgeId = null) => {
   clearGraphHighlight()
   if (nodeSel) {
-    nodeSel.filter(d => d.id === nodeId).attr('stroke', '#E91E63').attr('stroke-width', 4)
+    nodeSel.filter(d => d.id === nodeId).attr('stroke', HL_ACCENT).attr('stroke-width', 4)
   }
   if (linkSel) {
+    // 选中节点的所有相连边统一高亮
     linkSel.filter(d => d.data.source === nodeId || d.data.target === nodeId)
-      .attr('stroke', '#E91E63').attr('stroke-width', 2.5)
+      .attr('stroke', HL_ACCENT).attr('stroke-width', 2.5)
+    // 正在走查的边用更醒目的颜色/粗细区分
+    if (activeEdgeId) {
+      linkSel.filter(d => d.data.id === activeEdgeId)
+        .attr('stroke', HL_ACTIVE).attr('stroke-width', 5)
+      const edge = visibleEdges.value.find(e => e.id === activeEdgeId)
+      if (edge && nodeSel) {
+        const neighborId = edge.source === nodeId ? edge.target : edge.source
+        nodeSel.filter(d => d.id === neighborId).attr('stroke', HL_ACTIVE).attr('stroke-width', 4)
+      }
+    }
   }
 }
 
@@ -629,18 +644,23 @@ const renderGraph = () => {
 
   // 恢复选中高亮
   if (selectedItem.value) {
-    if (selectedItem.value.type === 'node') highlightNode(selectedItem.value.node.id)
-    else highlightEdge(selectedItem.value.edge.id)
+    if (selectedItem.value.type === 'node') {
+      const er = nodeEdges.value[activeReelIndex.value]
+      highlightNode(selectedItem.value.node.id, er ? er.edge.id : null)
+    } else {
+      highlightEdge(selectedItem.value.edge.id)
+    }
   }
 }
 
 // ---------- Edge Reel 交互 ----------
 const highlightActiveReel = () => {
+  if (!selectedItem.value || selectedItem.value.type !== 'node') return
+  const nodeId = selectedItem.value.node.id
   const er = nodeEdges.value[activeReelIndex.value]
-  if (er) {
-    emit('seen-edge', er.edge.id)
-    highlightEdge(er.edge.id)
-  }
+  if (er) emit('seen-edge', er.edge.id)
+  // 保持整个节点的边高亮，同时突出当前走查的边
+  highlightNode(nodeId, er ? er.edge.id : null)
 }
 
 const setActiveReel = (i) => {

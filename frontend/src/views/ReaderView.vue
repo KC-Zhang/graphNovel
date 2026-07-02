@@ -78,7 +78,12 @@
               <span
                 v-if="seg.link"
                 class="text-link"
-                :class="{ 'quote-mark': seg.mark, 'link-edge': seg.link.type === 'edge' }"
+                :class="{
+                  'quote-mark': seg.mark,
+                  'link-edge': seg.link.type === 'edge',
+                  'link-seen': linkSeen(seg.link),
+                  'link-unseen': !linkSeen(seg.link)
+                }"
                 :title="linkTitle(seg.link)"
                 @click="goToGraph(seg.link)"
               >{{ seg.text }}</span>
@@ -163,6 +168,10 @@ const goToGraph = (link) => {
   selectRequest.value = { type: link.type, id: link.id, nonce: Date.now() }
 }
 const linkTitle = (link) => `${t('reader.viewInGraph')}: ${link.name}`
+// 该关联项是否已读（用于正文内区分已读/未读）
+const linkSeen = (link) => link.type === 'node'
+  ? seenNodes.value.has(link.id)
+  : seenEdges.value.has(link.id)
 
 const phase = ref('loading') // loading | uploading | ready | error
 const statusMessage = ref('')
@@ -694,12 +703,21 @@ onUnmounted(() => {
   font-family: 'Noto Serif SC', 'Georgia', serif;
 }
 .para { margin: 0 0 1.1em; text-align: justify; }
-.text-link {
-  border-bottom: 1px dotted #7B2D8E; cursor: pointer; transition: background 0.15s;
+.text-link { cursor: pointer; border-radius: 2px; transition: background 0.15s; }
+/* 未读：醒目（实线 + 淡色底），节点用紫色、关系用粉色 */
+.text-link.link-unseen {
+  border-bottom: 2px solid #7B2D8E; background: rgba(123,45,142,0.10); font-weight: 600;
 }
-.text-link:hover { background: rgba(123,45,142,0.12); }
-.text-link.link-edge { border-bottom-color: #E91E63; }
-.text-link.link-edge:hover { background: rgba(233,30,99,0.12); }
+.text-link.link-unseen.link-edge {
+  border-bottom-color: #E91E63; background: rgba(233,30,99,0.10);
+}
+.text-link.link-unseen:hover { background: rgba(123,45,142,0.22); }
+.text-link.link-unseen.link-edge:hover { background: rgba(233,30,99,0.22); }
+/* 已读：弱化（灰色虚线） */
+.text-link.link-seen {
+  border-bottom: 1px dotted #bbb; color: inherit;
+}
+.text-link.link-seen:hover { background: rgba(0,0,0,0.05); }
 .quote-mark { background: #FFECB3; padding: 1px 2px; border-radius: 3px; box-shadow: 0 0 0 2px #FFECB3; transition: background 0.3s; }
 .quote-mark.flash { animation: quoteFlash 1.6s ease-out; }
 @keyframes quoteFlash {
