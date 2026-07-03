@@ -210,6 +210,25 @@
         </div>
       </section>
 
+      <!-- 核心能力展示 -->
+      <section class="capabilities-section">
+        <div class="capabilities-head">
+          <div class="panel-header">
+            <span class="status-dot">◆</span> {{ $t('home.capabilitiesHeader') }}
+          </div>
+          <h2 class="section-title">{{ $t('home.capabilitiesTitle') }}</h2>
+          <p class="section-desc">{{ $t('home.capabilitiesDesc') }}</p>
+        </div>
+        <div class="capabilities-grid">
+          <div v-for="feat in features" :key="feat.num" class="capability-card">
+            <span class="capability-icon">{{ feat.icon }}</span>
+            <div class="capability-num">{{ feat.num }}</div>
+            <div class="capability-title">{{ $t(feat.titleKey) }}</div>
+            <div class="capability-desc">{{ $t(feat.descKey) }}</div>
+          </div>
+        </div>
+      </section>
+
       <!-- 历史项目数据库 -->
       <HistoryDatabase />
     </div>
@@ -223,6 +242,16 @@ import HistoryDatabase from '../components/HistoryDatabase.vue'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 
 const router = useRouter()
+
+// 核心能力展示卡片
+const features = [
+  { num: '01', icon: '❖', titleKey: 'home.feat1Title', descKey: 'home.feat1Desc' },
+  { num: '02', icon: '⧉', titleKey: 'home.feat2Title', descKey: 'home.feat2Desc' },
+  { num: '03', icon: '⇄', titleKey: 'home.feat3Title', descKey: 'home.feat3Desc' },
+  { num: '04', icon: '↕', titleKey: 'home.feat4Title', descKey: 'home.feat4Desc' },
+  { num: '05', icon: '◐', titleKey: 'home.feat5Title', descKey: 'home.feat5Desc' },
+  { num: '06', icon: '▤', titleKey: 'home.feat6Title', descKey: 'home.feat6Desc' },
+]
 
 // 表单数据
 const formData = ref({
@@ -901,10 +930,75 @@ const startReading = () => {
   100% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
 }
 
+/* 核心能力展示 */
+.capabilities-section {
+  border-top: 1px solid var(--border);
+  padding-top: 60px;
+  margin-top: 80px;
+}
+
+.capabilities-head {
+  max-width: 720px;
+  margin-bottom: 40px;
+}
+
+.capabilities-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.capability-card {
+  background: var(--white);
+  padding: 32px 28px;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.capability-card:hover {
+  background: #FAFAFA;
+}
+
+.capability-icon {
+  font-size: 1.6rem;
+  color: var(--orange);
+  line-height: 1;
+}
+
+.capability-num {
+  position: absolute;
+  top: 28px;
+  right: 28px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--black);
+  opacity: 0.2;
+}
+
+.capability-title {
+  font-weight: 600;
+  font-size: 1.1rem;
+  margin: 18px 0 10px;
+  letter-spacing: -0.3px;
+}
+
+.capability-desc {
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--gray-text);
+}
+
 /* 响应式适配 */
 @media (max-width: 1024px) {
   .dashboard-section {
     flex-direction: column;
+  }
+
+  .capabilities-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
   
   .hero-section {
@@ -919,6 +1013,12 @@ const startReading = () => {
   .hero-logo {
     max-width: 200px;
     margin-bottom: 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  .capabilities-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

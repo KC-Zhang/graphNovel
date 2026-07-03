@@ -51,9 +51,9 @@
     </div>
 
     <!-- 阅读主界面 -->
-    <div v-else class="reader-body">
+    <div v-else class="reader-body" ref="readerBody">
       <!-- 左：书籍面板 -->
-      <div class="book-pane" ref="bookPane">
+      <div class="book-pane" ref="bookPane" :style="{ width: splitPct + '%' }">
         <div class="episode-head">
           <div class="episode-title">{{ currentEpisodeTitle }}</div>
           <div class="episode-head-right">
@@ -84,6 +84,7 @@
                   'link-seen': linkSeen(seg.link),
                   'link-unseen': !linkSeen(seg.link)
                 }"
+                :data-edge-id="seg.link.type === 'edge' ? seg.link.id : null"
                 :title="linkTitle(seg.link)"
                 @click="goToGraph(seg.link)"
               >{{ seg.text }}</span>
@@ -111,21 +112,22 @@
         </div>
       </div>
 
+      <!-- 拖拽调整左右比例 -->
+      <div class="pane-resizer" @mousedown="startResize"></div>
+
       <!-- 右：图谱面板 -->
       <div class="graph-pane">
         <GraphPanel
           :graph-data="graphData"
           :current-episode="revealMax"
+          :view-episode="viewEpisode"
           :episodes="episodes"
           :loading="graphLoading"
-          :seen-nodes="seenNodesArr"
           :seen-edges="seenEdgesArr"
           :select-request="selectRequest"
           @refresh="loadGraph"
           @jump="onJump"
-          @seen-node="id => markNodeSeen(id, true)"
           @seen-edge="id => markEdgeSeen(id, true)"
-          @set-node-seen="({ id, value }) => markNodeSeen(id, value)"
           @set-edge-seen="({ id, value }) => markEdgeSeen(id, value)"
         />
       </div>
@@ -153,14 +155,40 @@ const { t } = useI18n()
 
 // 阅读进度（localStorage 持久化）
 const {
-  readEpisodes, seenNodes, seenEdges, revealMax, viewEpisode,
-  load: loadProgress, markEpisodeRead, markNodeSeen, markEdgeSeen, isEpisodeRead
+  readEpisodes, seenEdges, revealMax, viewEpisode,
+  load: loadProgress, markEpisodeRead, markEdgeSeen, isEpisodeRead
 } = useReadingProgress()
 
-const seenNodesArr = computed(() => [...seenNodes.value])
 const seenEdgesArr = computed(() => [...seenEdges.value])
 const readCount = computed(() => readEpisodes.value.size)
 const showChapters = ref(false)
+
+// 左右分栏比例（书籍面板宽度百分比），可拖拽调整并持久化
+const SPLIT_KEY = 'bookmiro:splitPct'
+const splitPct = ref(Number(localStorage.getItem(SPLIT_KEY)) || 46)
+const readerBody = ref(null)
+const startResize = (e) => {
+  e.preventDefault()
+  const body = readerBody.value
+  if (!body) return
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+  const onMove = (ev) => {
+    const rect = body.getBoundingClientRect()
+    const pct = ((ev.clientX - rect.left) / rect.width) * 100
+    splitPct.value = Math.min(75, Math.max(25, pct))
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+    try { localStorage.setItem(SPLIT_KEY, String(Math.round(splitPct.value))) } catch (e) { /* ignore */ }
+    window.dispatchEvent(new Event('resize')) // 通知图谱重排
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
 
 // 反向链接：请求图谱选中并居中某节点/关系
 const selectRequest = ref(null)
@@ -168,9 +196,22 @@ const goToGraph = (link) => {
   selectRequest.value = { type: link.type, id: link.id, nonce: Date.now() }
 }
 const linkTitle = (link) => `${t('reader.viewInGraph')}: ${link.name}`
+// 节点已读状态由其（已揭示的）关系派生：无关系视为已读；所有关系已读则已读
+const nodeSeen = (nodeId) => {
+  const upto = revealMax.value
+  const edges = (graphData.value?.edges || [])
+  let has = false
+  for (const e of edges) {
+    if ((e.first_episode ?? 0) > upto) continue
+    if (e.source !== nodeId && e.target !== nodeId) continue
+    has = true
+    if (!seenEdges.value.has(e.id)) return false
+  }
+  return true
+}
 // 该关联项是否已读（用于正文内区分已读/未读）
 const linkSeen = (link) => link.type === 'node'
-  ? seenNodes.value.has(link.id)
+  ? nodeSeen(link.id)
   : seenEdges.value.has(link.id)
 
 const phase = ref('loading') // loading | uploading | ready | error
@@ -399,12 +440,32 @@ const checkAutoRead = () => {
   })
 }
 
-// 滚动到章节底部附近即自动标记为已读
+// 滚动到章节底部附近即自动标记为已读；滚过的关系链接自动标为已读
+let scrollRaf = null
 const onBookScroll = (e) => {
   const el = e.target
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
     markEpisodeRead(viewEpisode.value, true)
   }
+  if (scrollRaf) cancelAnimationFrame(scrollRaf)
+  scrollRaf = requestAnimationFrame(() => markScrolledPastEdges(el))
+}
+
+// 将已滚出视口上沿的关系链接标为已读（节点已读由此派生）
+const markScrolledPastEdges = (el) => {
+  const top = el.getBoundingClientRect().top
+  el.querySelectorAll('.text-link.link-edge').forEach(node => {
+    const id = node.getAttribute('data-edge-id')
+    if (!id || seenEdges.value.has(id)) return
+    if (node.getBoundingClientRect().bottom <= top + 4) markEdgeSeen(id, true)
+  })
+}
+
+// 翻到下一章视为读完本页：标记本页所有关系链接为已读
+const markCurrentPageEdgesSeen = () => {
+  episodeLinks.value.forEach(l => {
+    if (l.type === 'edge' && !seenEdges.value.has(l.id)) markEdgeSeen(l.id, true)
+  })
 }
 
 const toggleChapterRead = () => {
@@ -417,7 +478,10 @@ const jumpToChapter = (i) => {
 }
 
 const prevEpisode = () => setViewEpisode(viewEpisode.value - 1)
-const nextEpisode = () => setViewEpisode(viewEpisode.value + 1)
+const nextEpisode = () => {
+  markCurrentPageEdgesSeen()
+  setViewEpisode(viewEpisode.value + 1)
+}
 const onScrub = (e) => setViewEpisode(parseInt(e.target.value, 10))
 
 // 从图谱跳转到原文
@@ -587,6 +651,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearTimeout(pollTimer)
+  if (scrollRaf) cancelAnimationFrame(scrollRaf)
   flashTimers.forEach(clearTimeout)
 })
 </script>
@@ -670,10 +735,17 @@ onUnmounted(() => {
 /* 阅读主体 */
 .reader-body { flex: 1; display: flex; min-height: 0; }
 .book-pane {
-  width: 46%; min-width: 340px; display: flex; flex-direction: column;
-  border-right: 1px solid #eee; min-height: 0;
+  width: 46%; min-width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
+  min-height: 0;
 }
 .graph-pane { flex: 1; min-width: 0; }
+
+/* 左右分栏拖拽手柄 */
+.pane-resizer {
+  flex: 0 0 6px; cursor: col-resize; background: #eee;
+  transition: background 0.15s; position: relative; z-index: 5;
+}
+.pane-resizer:hover, .pane-resizer:active { background: #FF4500; }
 
 .episode-head {
   display: flex; align-items: baseline; justify-content: space-between;

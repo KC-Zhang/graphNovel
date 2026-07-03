@@ -9,6 +9,15 @@
         </button>
         <button
           class="tool-btn"
+          :class="{ active: chapterOnly }"
+          @click="chapterOnly = !chapterOnly"
+          :title="$t('graph.chapterOnly')"
+        >
+          <span>▤</span>
+          <span class="btn-text">{{ $t('graph.chapterOnly') }}</span>
+        </button>
+        <button
+          class="tool-btn"
           :class="{ active: focusUnread }"
           @click="focusUnread = !focusUnread"
           :title="$t('graph.focusUnread')"
@@ -55,7 +64,7 @@
           </div>
 
           <!-- 节点详情 + 关系走查 -->
-          <div v-if="selectedItem.type === 'node'" class="detail-content">
+          <div v-if="selectedItem.type === 'node'" class="detail-content" ref="detailContent" @scroll="onReelScroll">
             <div class="node-name">{{ selectedItem.node.name }}</div>
             <div class="node-aliases" v-if="selectedItem.node.aliases && selectedItem.node.aliases.length">
               {{ $t('graph.aliases') }}: {{ selectedItem.node.aliases.join('、') }}
@@ -85,7 +94,7 @@
                 </button>
               </div>
               <div class="reel-hint">{{ $t('graph.reelHint') }}</div>
-              <div class="reel-list" ref="reelList" @scroll="onReelScroll">
+              <div class="reel-list" ref="reelList">
                 <div
                   v-for="(er, i) in nodeEdges"
                   :key="er.edge.id"
@@ -145,17 +154,28 @@
       </div>
     </div>
 
-    <div v-if="hasGraph && entityTypes.length" class="graph-legend">
-      <span class="legend-title">{{ $t('graph.entityTypes') }}</span>
-      <div class="legend-items">
-        <div class="legend-item" v-for="type in entityTypes" :key="type.name">
-          <span class="legend-dot" :style="{ background: type.color }"></span>
-          <span class="legend-label">{{ type.name }}</span>
+    <div v-if="hasGraph && entityTypes.length" class="graph-legend" :class="{ collapsed: legendCollapsed }">
+      <div class="legend-head" @click="legendCollapsed = !legendCollapsed">
+        <span class="legend-title">{{ $t('graph.entityTypes') }}</span>
+        <button class="legend-toggle" :title="$t('graph.entityTypes')">{{ legendCollapsed ? '▸' : '▾' }}</button>
+      </div>
+      <template v-if="!legendCollapsed">
+        <div class="legend-items">
+          <div
+            class="legend-item"
+            v-for="type in entityTypes"
+            :key="type.name"
+            :class="{ active: activeType === type.name }"
+            @click="highlightType(type.name)"
+          >
+            <span class="legend-dot" :style="{ background: type.color }"></span>
+            <span class="legend-label">{{ type.name }}</span>
+          </div>
         </div>
-      </div>
-      <div class="legend-unread" v-if="unseenNodeCount || unseenEdgeCount">
-        {{ $t('graph.unreadNodes', { n: unseenNodeCount }) }} · {{ $t('graph.unreadLinks', { n: unseenEdgeCount }) }}
-      </div>
+        <div class="legend-unread" v-if="unseenNodeCount || unseenEdgeCount">
+          {{ $t('graph.unreadNodes', { n: unseenNodeCount }) }} · {{ $t('graph.unreadLinks', { n: unseenEdgeCount }) }}
+        </div>
+      </template>
     </div>
 
     <div v-if="hasGraph" class="edge-labels-toggle">
@@ -174,30 +194,35 @@ import * as d3 from 'd3'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
-  currentEpisode: Number,   // 阅读进度（揭示阈值）
+  currentEpisode: Number,   // 阅读进度（揭示阈值，累计视图）
+  viewEpisode: Number,      // 当前正在阅读的章节（本章视图）
   episodes: Array,          // 章节元数据（用于标题）
   loading: Boolean,
-  seenNodes: { type: Array, default: () => [] },  // 已查看节点 id
-  seenEdges: { type: Array, default: () => [] },  // 已查看关系 id
+  seenEdges: { type: Array, default: () => [] },  // 已查看关系 id（节点已读由此派生）
   selectRequest: { type: Object, default: null }  // 外部请求选中 { type, id, nonce }
 })
 
 const emit = defineEmits([
   'refresh', 'toggle-maximize', 'jump',
-  'seen-node', 'seen-edge', 'set-node-seen', 'set-edge-seen'
+  'seen-edge', 'set-edge-seen'
 ])
 
 const graphContainer = ref(null)
 const graphSvg = ref(null)
 const reelList = ref(null)
+const detailContent = ref(null)
 const selectedItem = ref(null)
 const showEdgeLabels = ref(true)
 const activeReelIndex = ref(0)
 const autoplay = ref(false)
 const focusUnread = ref(false)
+// 只显示当前章节的图谱（关系/实体过多时更快）；关闭时为累计视图
+const chapterOnly = ref(false)
+// 实体类型图例：可收起，点击某类型高亮该类全部实体
+const legendCollapsed = ref(false)
+const activeType = ref(null)
 
 // 已查看集合（快速查询）
-const seenNodeSet = computed(() => new Set(props.seenNodes))
 const seenEdgeSet = computed(() => new Set(props.seenEdges))
 
 const COLORS = ['#FF6B35', '#004E89', '#7B2D8E', '#1A936F', '#C5283D', '#E9724C', '#3498db', '#9b59b6', '#27ae60', '#f39c12']
@@ -210,18 +235,55 @@ const HL_ACTIVE = '#FF4500'
 const positionCache = new Map()
 
 // ---------- 可见子图（按阅读进度过滤） ----------
+const mentionedIn = (item, ep) => (item.mentions || []).some(m => m.episode === ep)
+
 const visibleNodes = computed(() => {
   const nodes = props.graphData?.nodes || []
+  if (chapterOnly.value) {
+    const ep = props.viewEpisode ?? 0
+    const edges = props.graphData?.edges || []
+    // 本章提及的实体 + 本章关系涉及的两端实体
+    const keep = new Set()
+    nodes.forEach(n => { if (mentionedIn(n, ep)) keep.add(n.id) })
+    edges.forEach(e => {
+      if (mentionedIn(e, ep)) { keep.add(e.source); keep.add(e.target) }
+    })
+    return nodes.filter(n => keep.has(n.id))
+  }
   const upto = props.currentEpisode ?? 0
   return nodes.filter(n => (n.first_episode ?? 0) <= upto)
 })
 
 const visibleEdges = computed(() => {
-  const upto = props.currentEpisode ?? 0
   const ids = new Set(visibleNodes.value.map(n => n.id))
-  return (props.graphData?.edges || []).filter(
+  const edges = props.graphData?.edges || []
+  if (chapterOnly.value) {
+    const ep = props.viewEpisode ?? 0
+    return edges.filter(e => mentionedIn(e, ep) && ids.has(e.source) && ids.has(e.target))
+  }
+  const upto = props.currentEpisode ?? 0
+  return edges.filter(
     e => (e.first_episode ?? 0) <= upto && ids.has(e.source) && ids.has(e.target)
   )
+})
+
+// 节点已读状态：由其（可见）关系派生。无关系视为已读；所有关系已读则已读。
+const nodeSeenSet = computed(() => {
+  const degree = {}
+  const unseen = {}
+  visibleEdges.value.forEach(e => {
+    degree[e.source] = (degree[e.source] || 0) + 1
+    degree[e.target] = (degree[e.target] || 0) + 1
+    if (!seenEdgeSet.value.has(e.id)) {
+      unseen[e.source] = (unseen[e.source] || 0) + 1
+      unseen[e.target] = (unseen[e.target] || 0) + 1
+    }
+  })
+  const seen = new Set()
+  visibleNodes.value.forEach(n => {
+    if (!(unseen[n.id] > 0)) seen.add(n.id)
+  })
+  return seen
 })
 
 const hasGraph = computed(() => visibleNodes.value.length > 0)
@@ -250,7 +312,7 @@ const colorForType = (type) => {
 
 // 当前可见范围内的未读数量
 const unseenNodeCount = computed(() =>
-  visibleNodes.value.filter(n => !seenNodeSet.value.has(n.id)).length
+  visibleNodes.value.filter(n => !nodeSeenSet.value.has(n.id)).length
 )
 const unseenEdgeCount = computed(() =>
   visibleEdges.value.filter(e => !seenEdgeSet.value.has(e.id)).length
@@ -259,7 +321,7 @@ const unseenEdgeCount = computed(() =>
 // 当前选中项是否已读
 const selectedSeen = computed(() => {
   if (!selectedItem.value) return false
-  if (selectedItem.value.type === 'node') return seenNodeSet.value.has(selectedItem.value.node.id)
+  if (selectedItem.value.type === 'node') return nodeSeenSet.value.has(selectedItem.value.node.id)
   return seenEdgeSet.value.has(selectedItem.value.edge.id)
 })
 
@@ -267,7 +329,11 @@ const toggleSelectedSeen = () => {
   if (!selectedItem.value) return
   const value = !selectedSeen.value
   if (selectedItem.value.type === 'node') {
-    emit('set-node-seen', { id: selectedItem.value.node.id, value })
+    // 节点已读状态由其关系派生：批量标记该节点的所有可见关系
+    const id = selectedItem.value.node.id
+    visibleEdges.value.forEach(e => {
+      if (e.source === id || e.target === id) emit('set-edge-seen', { id: e.id, value })
+    })
   } else {
     emit('set-edge-seen', { id: selectedItem.value.edge.id, value })
   }
@@ -306,6 +372,7 @@ const jumpTo = (mention) => {
 const closeDetailPanel = () => {
   selectedItem.value = null
   autoplay.value = false
+  activeType.value = null
   clearGraphHighlight()
 }
 
@@ -345,12 +412,12 @@ const exemptIds = () => {
 // 根据已读状态更新节点/边样式（未读强调、已读弱化、专注未读时进一步淡化）
 const applySeenStyles = () => {
   const { nodes: exNodes, edges: exEdges } = exemptIds()
-  const dimNode = (id) => focusUnread.value && seenNodeSet.value.has(id) && !exNodes.has(id)
+  const dimNode = (id) => focusUnread.value && nodeSeenSet.value.has(id) && !exNodes.has(id)
   const dimEdge = (id) => focusUnread.value && seenEdgeSet.value.has(id) && !exEdges.has(id)
   if (nodeSel) {
     nodeSel
-      .attr('r', d => seenNodeSet.value.has(d.id) ? 9 : 12)
-      .classed('node-unseen', d => !seenNodeSet.value.has(d.id))
+      .attr('r', d => nodeSeenSet.value.has(d.id) ? 9 : 12)
+      .classed('node-unseen', d => !nodeSeenSet.value.has(d.id))
       .attr('opacity', d => dimNode(d.id) ? 0.2 : 1)
   }
   if (nodeLabelSel) {
@@ -366,6 +433,26 @@ const applySeenStyles = () => {
 const clearGraphHighlight = () => {
   if (nodeSel) nodeSel.attr('stroke', '#fff').attr('stroke-width', 2.5)
   if (linkSel) linkSel.attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
+}
+
+// 按实体类型高亮该类全部节点
+const applyTypeHighlight = () => {
+  if (!nodeSel || !activeType.value) return
+  nodeSel.filter(d => (d.type || '—') === activeType.value)
+    .attr('stroke', HL_ACCENT).attr('stroke-width', 4.5)
+}
+
+const highlightType = (typeName) => {
+  if (activeType.value === typeName) {
+    activeType.value = null
+    clearGraphHighlight()
+    return
+  }
+  // 类型高亮与选中详情互斥
+  selectedItem.value = null
+  activeType.value = typeName
+  clearGraphHighlight()
+  applyTypeHighlight()
 }
 
 const highlightEdge = (edgeId) => {
@@ -410,7 +497,7 @@ const selectNode = (node) => {
   }
   activeReelIndex.value = 0
   autoplay.value = false
-  emit('seen-node', node.id)
+  activeType.value = null
   highlightNode(node.id)
   nextTick(() => {
     if (nodeEdges.value.length) highlightActiveReel()
@@ -424,6 +511,7 @@ const selectEdge = (edge) => {
     sourceName: nodeById.value[edge.source]?.name || '—',
     targetName: nodeById.value[edge.target]?.name || '—'
   }
+  activeType.value = null
   emit('seen-edge', edge.id)
   highlightEdge(edge.id)
 }
@@ -650,6 +738,8 @@ const renderGraph = () => {
     } else {
       highlightEdge(selectedItem.value.edge.id)
     }
+  } else if (activeType.value) {
+    applyTypeHighlight()
   }
 }
 
@@ -669,11 +759,17 @@ const setActiveReel = (i) => {
   scrollReelToActive()
 }
 
+// 关系列表已不再单独滚动，随详情面板（.detail-content）一起滚动
 const scrollReelToActive = () => {
   const list = reelList.value
-  if (!list) return
+  const scroller = detailContent.value
+  if (!list || !scroller) return
   const item = list.children[activeReelIndex.value]
-  if (item) list.scrollTo({ top: item.offsetTop - list.offsetTop - 8, behavior: 'smooth' })
+  if (!item) return
+  const itemRect = item.getBoundingClientRect()
+  const scRect = scroller.getBoundingClientRect()
+  const target = scroller.scrollTop + (itemRect.top - scRect.top) - (scroller.clientHeight - item.clientHeight) / 2
+  scroller.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
 }
 
 let reelScrollRaf = null
@@ -682,15 +778,18 @@ const onReelScroll = () => {
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
   reelScrollRaf = requestAnimationFrame(() => {
     const list = reelList.value
-    if (!list) return
-    const center = list.scrollTop + list.clientHeight / 2
-    let best = 0, bestDist = Infinity
+    const scroller = detailContent.value
+    if (!list || !scroller) return
+    const scRect = scroller.getBoundingClientRect()
+    const center = scRect.top + scroller.clientHeight / 2
+    let best = -1, bestDist = Infinity
     Array.from(list.children).forEach((child, i) => {
-      const mid = child.offsetTop - list.offsetTop + child.clientHeight / 2
+      const r = child.getBoundingClientRect()
+      const mid = r.top + r.height / 2
       const dist = Math.abs(mid - center)
       if (dist < bestDist) { bestDist = dist; best = i }
     })
-    if (best !== activeReelIndex.value) {
+    if (best >= 0 && best !== activeReelIndex.value) {
       activeReelIndex.value = best
       highlightActiveReel()
     }
@@ -720,7 +819,7 @@ const onKey = (e) => {
 }
 
 // ---------- watchers ----------
-const revealKey = computed(() => `${visibleNodes.value.length}_${visibleEdges.value.length}_${props.currentEpisode}`)
+const revealKey = computed(() => `${visibleNodes.value.length}_${visibleEdges.value.length}_${props.currentEpisode}_${chapterOnly.value ? 'c' + (props.viewEpisode ?? 0) : 'a'}`)
 watch(revealKey, () => { nextTick(renderGraph) })
 watch(() => props.graphData, () => { nextTick(renderGraph) }, { deep: false })
 
@@ -730,7 +829,7 @@ watch(showEdgeLabels, (v) => {
 })
 
 // 已读状态 / 专注未读 / 选中项变化时，仅更新样式，避免整图重排
-watch([() => props.seenNodes, () => props.seenEdges, focusUnread, () => selectedItem.value], () => {
+watch([() => props.seenEdges, focusUnread, () => selectedItem.value], () => {
   applySeenStyles()
 })
 
@@ -801,12 +900,29 @@ onUnmounted(() => {
   background: rgba(255,255,255,0.95); padding: 12px 16px; border-radius: 8px;
   border: 1px solid #EAEAEA; box-shadow: 0 4px 16px rgba(0,0,0,0.06); z-index: 10;
 }
-.legend-title {
-  display: block; font-size: 11px; font-weight: 600; color: #E91E63;
-  margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+.graph-legend.collapsed { padding: 8px 14px; }
+.legend-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  cursor: pointer; user-select: none;
 }
-.legend-items { display: flex; flex-wrap: wrap; gap: 10px 16px; max-width: 320px; }
-.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; }
+.graph-legend:not(.collapsed) .legend-head { margin-bottom: 10px; }
+.legend-title {
+  font-size: 11px; font-weight: 600; color: #E91E63;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.legend-toggle {
+  border: none; background: none; cursor: pointer; color: #999;
+  font-size: 11px; line-height: 1; padding: 0;
+}
+.legend-toggle:hover { color: #E91E63; }
+.legend-items { display: flex; flex-wrap: wrap; gap: 8px 10px; max-width: 320px; }
+.legend-item {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555;
+  cursor: pointer; padding: 3px 8px; border-radius: 12px;
+  border: 1px solid transparent; transition: all 0.15s;
+}
+.legend-item:hover { background: #F5F5F5; }
+.legend-item.active { background: #FCE4EC; border-color: #E91E63; color: #E91E63; font-weight: 600; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .legend-label { white-space: nowrap; }
 
@@ -853,7 +969,7 @@ input:checked + .slider:before { transform: translateX(18px); }
   color: #999; line-height: 1; padding: 0; transition: color 0.2s;
 }
 .detail-close:hover { color: #333; }
-.detail-content { padding: 16px; overflow-y: auto; flex: 1; }
+.detail-content { padding: 16px; overflow-y: auto; flex: 1; scroll-behavior: smooth; }
 
 .node-name { font-size: 16px; font-weight: 600; color: #222; margin-bottom: 4px; }
 .node-aliases { font-size: 12px; color: #888; margin-bottom: 8px; }
@@ -885,7 +1001,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 .reel-play:hover { background: #F5F0F8; }
 .reel-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
-.reel-list { max-height: 260px; overflow-y: auto; scroll-behavior: smooth; }
+.reel-list { }
 .reel-item {
   padding: 10px; border: 1px solid #EEE; border-radius: 8px; margin-bottom: 8px;
   cursor: pointer; transition: all 0.2s; background: #FFF;
