@@ -6,7 +6,7 @@
 
 **Read a book as a living knowledge graph.**
 </br>
-<em>Upload a PDF or TXT, and BookMiro turns it into a character-and-relationship graph that reveals itself, spoiler-free, as you read.</em>
+<em>Upload a PDF, EPUB, or TXT, and BookMiro turns it into a character-and-relationship graph that reveals itself, spoiler-free, as you read.</em>
 
 [English](./README.md) | [中文文档](./README-ZH.md)
 
@@ -16,7 +16,7 @@
 
 **BookMiro** converts a book into a knowledge graph and syncs it to your reading progress. Instead of dumping the whole graph up front, it reveals only what you have already read — so it never spoils what is coming.
 
-You only need to upload a book (PDF / TXT / Markdown). BookMiro will:
+You only need to upload a book (PDF / EPUB / TXT / Markdown). BookMiro will:
 
 - Split it into ordered episodes (chapters, with a fixed-size fallback).
 - Extract entities (characters, places, organizations, items, concepts) and their relationships, **in the same language as the book**.
@@ -27,7 +27,7 @@ You only need to upload a book (PDF / TXT / Markdown). BookMiro will:
 - **Reading-synced reveal**: the graph grows as you progress; already-read chapters only. Newly introduced nodes pulse so you can spot "what's new this chapter".
 - **Language-locked extraction**: a Chinese book yields Chinese nodes, edge labels, and types — never mismatched English.
 - **Jump to the source**: every node and relationship stores verbatim quotes; click to jump into the book text and read the surrounding context, with the passage highlighted.
-- **Effortless relationship browsing (edge reel)**: select a character and scroll / arrow-key / auto-play through all of its relationships, each auto-highlighting on the graph — no clicking each edge.
+- **Effortless relationship browsing (edge reel)**: select a character and scroll or arrow-key through all of its relationships, each auto-highlighting on the graph.
 - **Lazy + streaming**: extraction runs on demand around your reading position (with a small look-ahead), so reading starts instantly and the graph fills in as you go.
 
 ## Quick Start
@@ -108,7 +108,7 @@ reference, and data/backup notes.
 ## How It Works
 
 ```
-Upload (PDF/TXT) -> Split into episodes -> Per-episode LLM extraction (language-locked)
+Upload (PDF/EPUB/TXT) -> Split into episodes -> Per-episode LLM extraction (language-locked)
    -> graph.json (nodes/edges tagged with first_episode + source quotes)
    -> Reader reveals the graph up to your current chapter
 ```

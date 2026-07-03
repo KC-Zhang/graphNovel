@@ -3,7 +3,7 @@
 A running log of the reader/graph features built so far. Append new entries as features land.
 
 ## Ingestion & extraction
-- **Upload PDF / TXT / MD** — drag-and-drop or browse; multiple files per book (`Home.vue`, `api/book.js`).
+- **Upload PDF / EPUB / TXT / MD** — drag-and-drop or browse; multiple files per book (`Home.vue`, `api/book.js`).
 - **Automatic chapter splitting** — uploaded text is segmented into ordered episodes.
 - **Incremental, on-demand extraction** — entities and relationships are extracted chapter-by-chapter, prefetching ahead of the reading position (`ensureAhead`, `PREFETCH`). You can start reading immediately while the graph builds in the background.
 - **Same-language graph** — the knowledge graph is built in the book's own language.
@@ -13,12 +13,13 @@ A running log of the reader/graph features built so far. Append new entries as f
 - **Chapter reader** with title, per-chapter counter, and a chapter drawer (table of contents) showing read/unread state.
 - **Progress tracking (localStorage, per book)** — read episodes, reading position (`revealMax` / `viewEpisode`), and read relationships persist across sessions.
 - **Auto mark-as-read** — a chapter is marked read when scrolled to the bottom, or immediately if it fits without scrolling.
-- **No-spoiler progressive reveal** — the graph only reveals entities/relationships up to the furthest chapter read (`first_episode <= revealMax`).
+- **Adjustable progressive reveal** — the graph reveals entities/relationships up to a user-controlled cap (`first_episode <= revealMax`), with forward reading able to advance it automatically.
 - **Resizable split** — drag the divider between the reading pane and the graph pane to set the proportion; the choice is persisted (`bookmiro:splitPct`).
 
 ## Text ↔ graph cross-linking
 - **Reverse links in the text** — entity mentions (purple) and relationship mentions (pink) are highlighted inline; clicking one selects and centers it in the graph.
 - **Jump to source** — from any entity/relationship in the graph, jump back to the exact quote in the chapter, with scroll + flash highlight.
+- **Unified reader search** — search all loaded graph nodes/edges first, then whole-book body text; graph results select the item in the graph and body results jump to the matching passage.
 
 ## Read-tracking model (edge-derived)
 - **Relationships are the unit of "read".** Only relationships (edges) are tracked directly in `seenEdges`.
@@ -32,8 +33,9 @@ A running log of the reader/graph features built so far. Append new entries as f
 - **Entity type legend** with per-type colors; toggle for relationship labels.
 - **Unread emphasis** — unread entities pulse and render larger; read ones shrink and dim.
 - **Focus unread (只看未读)** — fades already-read entities/relationships to spotlight what's new.
+- **Graph reveal control** — adjust the cumulative graph cap directly from the graph panel without moving the reader's current chapter.
 - **Current-chapter vs cumulative view (本章)** — toggle between the full cumulative graph and only the entities/relationships mentioned in the chapter you're currently viewing; the chapter view keeps the simulation small and fast on large books.
-- **Entity detail + relationship reel** — an entity's relationships are listed and can be walked one-by-one (scroll or ↑/↓, or autoplay), each highlighting on the graph. The reel flows with the detail panel (no nested scrollbar).
+- **Entity detail + relationship reel** — an entity's relationships are listed and can be walked one-by-one by scrolling or using ↑/↓, each highlighting on the graph. The reel flows with the detail panel (no nested scrollbar).
 - **Stable layout** — node positions are cached so the graph doesn't jump as it expands chapter by chapter.
 
 ## Platform

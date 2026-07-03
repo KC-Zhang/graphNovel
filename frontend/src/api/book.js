@@ -1,7 +1,7 @@
 import service, { requestWithRetry } from './index'
 
 /**
- * 上传书籍文件（PDF/TXT/MD），解析并分章
+ * 上传书籍文件（PDF/EPUB/TXT/MD），解析并分章
  * @param {FormData} formData - files, book_name
  * @returns {Promise}
  */

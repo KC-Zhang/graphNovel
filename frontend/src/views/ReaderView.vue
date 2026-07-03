@@ -8,6 +8,53 @@
         <span v-if="language" class="lang-badge">{{ language }}</span>
       </div>
       <div class="nav-right">
+        <div v-if="phase === 'ready'" class="reader-search" ref="searchBox">
+          <div class="search-input-wrap" :class="{ active: searchOpen || searchQuery }">
+            <span class="search-icon">⌕</span>
+            <input
+              v-model="searchQuery"
+              class="search-input"
+              type="search"
+              :placeholder="$t('reader.searchPlaceholder')"
+              @focus="openSearch"
+              @keydown.enter.prevent="onSearchEnter"
+              @keydown.esc.prevent="clearSearch"
+            />
+            <button
+              v-if="searchQuery"
+              class="search-clear"
+              :title="$t('reader.searchClear')"
+              @click="clearSearch"
+            >
+              ×
+            </button>
+          </div>
+          <div v-if="searchQuery" class="search-controls">
+            <button class="search-nav-btn" :disabled="!searchResults.length" :title="$t('reader.searchPrev')" @click="moveSearch(-1)">‹</button>
+            <span class="search-count">
+              {{ searchLoading ? $t('reader.searching') : $t('reader.searchCount', { count: searchResults.length }) }}
+            </span>
+            <button class="search-nav-btn" :disabled="!searchResults.length" :title="$t('reader.searchNext')" @click="moveSearch(1)">›</button>
+          </div>
+          <div v-if="searchOpen && searchQuery" class="search-results">
+            <div v-if="searchLoading && !searchResults.length" class="search-empty">{{ $t('reader.searching') }}</div>
+            <div v-else-if="!searchLoading && !searchResults.length" class="search-empty">{{ $t('reader.searchNoResults') }}</div>
+            <button
+              v-for="(result, i) in searchResults"
+              :key="result.id"
+              class="search-result"
+              :class="[result.kind, { active: i === activeSearchIndex }]"
+              @mousedown.prevent="selectSearchResult(result, i)"
+            >
+              <span class="search-result-kind">{{ searchKindLabel(result.kind) }}</span>
+              <span class="search-result-main">
+                <span class="search-result-title">{{ result.title }}</span>
+                <span class="search-result-subtitle">{{ result.subtitle }}</span>
+                <span v-if="result.snippet" class="search-result-snippet">{{ result.snippet }}</span>
+              </span>
+            </button>
+          </div>
+        </div>
         <button v-if="phase === 'ready'" class="chapters-btn" @click="showChapters = !showChapters">
           ☰ {{ $t('reader.chapters') }}
         </button>
@@ -181,11 +228,13 @@
           :extract-progress="extractProgress"
           :seen-edges="seenEdgesArr"
           :select-request="selectRequest"
+          :latest-read-episode="latestReadEpisode"
           @refresh="refreshGraph"
           @toggle-maximize="toggleGraphMaximized"
           @jump="onJump"
           @seen-edge="id => markEdgeSeen(id, true)"
           @set-edge-seen="({ id, value }) => markEdgeSeen(id, value)"
+          @set-reveal-max="setRevealMax"
         />
       </div>
     </div>
@@ -193,7 +242,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
@@ -205,8 +254,18 @@ import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
 import { createMentionIndex, findQuoteRange } from '../utils/readerLinks'
 import { visibleInterval, isRangeCovered } from '../utils/readProgress'
+import { clampRevealMax, latestReadableEpisode } from '../utils/revealProgress'
+import {
+  normalizeSearchQuery,
+  orderSearchResults,
+  searchBodyTexts,
+  searchGraphData,
+} from '../utils/readerSearch'
 
 const PREFETCH = 2
+const SEARCH_DEBOUNCE_MS = 220
+const SEARCH_BODY_CONCURRENCY = 4
+const MAX_SEARCH_RESULTS = 300
 
 const props = defineProps({ projectId: String })
 const router = useRouter()
@@ -247,6 +306,14 @@ const chapterState = (i) => {
 const chapterPercent = (i) => Math.round((chapterProgress.value[i] || 0) * 100)
 const showChapters = ref(false)
 const graphMaximized = ref(false)
+const latestReachedEpisode = ref(0)
+const latestReadEpisode = computed(() => latestReadableEpisode({
+  viewEpisode: viewEpisode.value,
+  readEpisodes: readEpisodes.value,
+  episodeRanges: episodeRanges.value,
+  total: episodes.value.length,
+  extraEpisodes: [latestReachedEpisode.value],
+}))
 
 // 左右分栏比例（书籍面板宽度百分比），可拖拽调整并持久化
 const SPLIT_KEY = 'bookmiro:splitPct'
@@ -313,6 +380,15 @@ const graphData = ref({ nodes: [], edges: [] })
 const episodeTextCache = new Map()
 const currentText = ref('')
 const highlightQuote = ref('')
+const searchBox = ref(null)
+const searchQuery = ref('')
+const searchOpen = ref(false)
+const searchLoading = ref(false)
+const searchResults = ref([])
+const activeSearchIndex = ref(-1)
+const searchHighlightRange = ref(null)
+let searchTimer = null
+let searchNonce = 0
 
 // 增量抽取状态
 const extractedUpto = ref(-1)
@@ -320,11 +396,16 @@ const extractRunning = ref(false)
 const extractError = ref('')
 // 正在读的章节图谱还没抽到时，显示"构建中"
 const graphLoading = computed(() => revealMax.value > extractedUpto.value)
+const desiredExtractUpto = computed(() => {
+  const total = episodes.value.length
+  if (!total) return -1
+  return Math.min(total - 1, Math.max(viewEpisode.value + PREFETCH, revealMax.value))
+})
 const extractProgress = computed(() => {
   const total = episodes.value.length
   return {
     extracted: Math.max(0, extractedUpto.value + 1),
-    target: total ? Math.min(total, viewEpisode.value + PREFETCH + 1) : 0,
+    target: total ? Math.min(total, desiredExtractUpto.value + 1) : 0,
     total,
     running: extractRunning.value,
     error: extractError.value,
@@ -339,6 +420,10 @@ const currentEpisodeTitle = computed(() => {
 const chapterPreviewItems = computed(() => episodes.value.slice(0, 30))
 
 const highlightRange = computed(() => {
+  const searchRange = searchHighlightRange.value
+  if (searchRange && searchRange.episode === viewEpisode.value) {
+    return { start: searchRange.start, end: searchRange.end }
+  }
   if (!highlightQuote.value) return null
   return findQuoteRange(currentText.value || '', highlightQuote.value)
 })
@@ -439,6 +524,10 @@ const toggleGraphMaximized = () => {
   nextTick(() => window.dispatchEvent(new Event('resize')))
 }
 
+const openSearch = () => {
+  searchOpen.value = true
+}
+
 const confirmChapterReview = async () => {
   if (!episodes.value.length) {
     errorText.value = t('reader.noEpisodes')
@@ -450,29 +539,58 @@ const confirmChapterReview = async () => {
 }
 
 // ---------- 章节文本加载 ----------
-const loadEpisodeText = async (idx) => {
+const fetchEpisodeText = async (idx) => {
   if (episodeTextCache.has(idx)) {
-    currentText.value = episodeTextCache.get(idx)
-    return
+    return episodeTextCache.get(idx)
   }
   try {
     const res = await getEpisode(projectId.value, idx)
     if (res.success) {
       const text = res.data.text || ''
       episodeTextCache.set(idx, text)
-      currentText.value = text
+      return text
     }
   } catch (e) {
-    currentText.value = ''
+    // ignore transient fetch errors while searching
   }
+  return ''
+}
+
+const loadEpisodeText = async (idx) => {
+  currentText.value = await fetchEpisodeText(idx)
+}
+
+const recordReachedEpisode = (idx) => {
+  latestReachedEpisode.value = Math.max(
+    latestReachedEpisode.value,
+    clampRevealMax(idx, episodes.value.length)
+  )
+}
+
+const syncLatestReachedFromProgress = () => {
+  latestReachedEpisode.value = latestReadableEpisode({
+    viewEpisode: viewEpisode.value,
+    readEpisodes: readEpisodes.value,
+    episodeRanges: episodeRanges.value,
+    total: episodes.value.length,
+    extraEpisodes: [revealMax.value],
+  })
+}
+
+const setRevealMax = (idx) => {
+  revealMax.value = clampRevealMax(idx, episodes.value.length)
+  if (revealMax.value > extractedUpto.value) ensureAhead()
 }
 
 const setViewEpisode = async (idx) => {
   idx = Math.max(0, Math.min(idx, episodes.value.length - 1))
   cancelDwell()
+  const previousEpisode = viewEpisode.value
   viewEpisode.value = idx
-  if (idx > revealMax.value) revealMax.value = idx
+  recordReachedEpisode(idx)
+  if (idx > previousEpisode && idx > revealMax.value) revealMax.value = idx
   highlightQuote.value = ''
+  searchHighlightRange.value = null
   await loadEpisodeText(idx)
   scrollBookTop()
   checkAutoRead()
@@ -615,15 +733,129 @@ const nextEpisode = () => {
 }
 const onScrub = (e) => setViewEpisode(parseInt(e.target.value, 10))
 
+const searchKindLabel = (kind) => {
+  const map = {
+    node: t('reader.searchKindNode'),
+    edge: t('reader.searchKindEdge'),
+    body: t('reader.searchKindBody'),
+  }
+  return map[kind] || kind
+}
+
+const runSearch = async () => {
+  const query = normalizeSearchQuery(searchQuery.value)
+  const nonce = ++searchNonce
+  if (!query) {
+    searchResults.value = []
+    activeSearchIndex.value = -1
+    searchLoading.value = false
+    return
+  }
+
+  searchLoading.value = true
+  const graphResults = searchGraphData(graphData.value, query)
+  searchResults.value = orderSearchResults(graphResults).slice(0, MAX_SEARCH_RESULTS)
+
+  const textsByEpisode = new Map()
+  let nextEpisodeIndex = 0
+  const workerCount = Math.min(SEARCH_BODY_CONCURRENCY, episodes.value.length)
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextEpisodeIndex < episodes.value.length && nonce === searchNonce) {
+      const ep = episodes.value[nextEpisodeIndex]
+      const idx = Number.isFinite(ep?.index) ? ep.index : nextEpisodeIndex
+      nextEpisodeIndex += 1
+      const text = await fetchEpisodeText(idx)
+      textsByEpisode.set(idx, text)
+    }
+  })
+
+  await Promise.all(workers)
+  if (nonce !== searchNonce) return
+
+  const bodyResults = searchBodyTexts({
+    episodes: episodes.value,
+    textsByEpisode,
+    query,
+  })
+  searchResults.value = orderSearchResults([...graphResults, ...bodyResults]).slice(0, MAX_SEARCH_RESULTS)
+  activeSearchIndex.value = searchResults.value.length ? Math.min(activeSearchIndex.value, searchResults.value.length - 1) : -1
+  searchLoading.value = false
+}
+
+const scheduleSearch = () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS)
+}
+
+const clearSearch = () => {
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null }
+  searchNonce += 1
+  searchQuery.value = ''
+  searchOpen.value = false
+  searchLoading.value = false
+  searchResults.value = []
+  activeSearchIndex.value = -1
+  searchHighlightRange.value = null
+}
+
+const selectSearchResult = async (result, index = searchResults.value.indexOf(result)) => {
+  if (!result) return
+  activeSearchIndex.value = index
+  searchOpen.value = false
+
+  if (result.kind === 'node' || result.kind === 'edge') {
+    searchHighlightRange.value = null
+    highlightQuote.value = ''
+    if (Number.isFinite(result.episode) && result.episode > revealMax.value) {
+      setRevealMax(result.episode)
+      await nextTick()
+    }
+    selectRequest.value = { type: result.kind, id: result.id, nonce: Date.now() }
+    return
+  }
+
+  if (result.kind === 'body') {
+    if (graphMaximized.value) toggleGraphMaximized()
+    highlightQuote.value = ''
+    if (result.episode !== viewEpisode.value) {
+      await setViewEpisode(result.episode)
+    }
+    searchHighlightRange.value = { episode: result.episode, start: result.start, end: result.end }
+    await nextTick()
+    scrollToHighlight()
+  }
+}
+
+const moveSearch = async (delta) => {
+  if (!searchResults.value.length) return
+  const length = searchResults.value.length
+  const base = activeSearchIndex.value >= 0 ? activeSearchIndex.value : (delta > 0 ? -1 : 0)
+  const nextIndex = (base + delta + length) % length
+  await selectSearchResult(searchResults.value[nextIndex], nextIndex)
+}
+
+const onSearchEnter = (e) => {
+  moveSearch(e.shiftKey ? -1 : 1)
+}
+
+const onSearchDocumentMouseDown = (e) => {
+  if (!searchOpen.value) return
+  if (searchBox.value && searchBox.value.contains(e.target)) return
+  searchOpen.value = false
+}
+
 // 从图谱跳转到原文
 const onJump = async ({ episode, quote }) => {
   if (episode !== viewEpisode.value) {
+    const previousEpisode = viewEpisode.value
     viewEpisode.value = Math.max(0, Math.min(episode, episodes.value.length - 1))
-    if (viewEpisode.value > revealMax.value) revealMax.value = viewEpisode.value
+    recordReachedEpisode(viewEpisode.value)
+    if (viewEpisode.value > previousEpisode && viewEpisode.value > revealMax.value) revealMax.value = viewEpisode.value
     await loadEpisodeText(viewEpisode.value)
   }
   // 先清空再设置，保证即使重复点击同一引用也会重新触发滚动/高亮
   highlightQuote.value = ''
+  searchHighlightRange.value = null
   await nextTick()
   highlightQuote.value = quote
   scrollToHighlight()
@@ -694,7 +926,8 @@ const startPolling = () => {
 // 确保抽取推进到"当前阅读位置 + 预取"的章节
 const ensureAhead = async () => {
   if (!projectId.value || projectId.value === 'new' || !episodes.value.length) return
-  const target = Math.min(viewEpisode.value + PREFETCH, episodes.value.length - 1)
+  const target = desiredExtractUpto.value
+  if (target < 0) return
   try {
     const res = await ensureExtraction(projectId.value, target)
     if (res.success) {
@@ -732,6 +965,7 @@ const initExisting = async () => {
       return
     }
     loadProgress(projectId.value)  // 恢复已读进度与阅读位置
+    syncLatestReachedFromProgress()
     extractedUpto.value = typeof res.data.extracted_upto === 'number' ? res.data.extracted_upto : -1
     lastLoadedUpto = extractedUpto.value
 
@@ -777,6 +1011,7 @@ const initNew = async () => {
       return
     }
     loadProgress(projectId.value)  // 新书：初始化空进度并绑定 projectId
+    syncLatestReachedFromProgress()
     extractedUpto.value = -1
     lastLoadedUpto = -1
     // 更新 URL 以便刷新/分享
@@ -798,7 +1033,26 @@ const retry = () => {
   }
 }
 
+watch(searchQuery, () => {
+  const query = normalizeSearchQuery(searchQuery.value)
+  activeSearchIndex.value = -1
+  searchHighlightRange.value = null
+  if (!query) {
+    searchOpen.value = false
+    searchResults.value = []
+    searchLoading.value = false
+    return
+  }
+  searchOpen.value = true
+  scheduleSearch()
+})
+
+watch(() => graphData.value, () => {
+  if (normalizeSearchQuery(searchQuery.value)) scheduleSearch()
+}, { deep: false })
+
 onMounted(() => {
+  document.addEventListener('mousedown', onSearchDocumentMouseDown)
   if (props.projectId === 'new') {
     initNew()
   } else {
@@ -807,6 +1061,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('mousedown', onSearchDocumentMouseDown)
+  if (searchTimer) clearTimeout(searchTimer)
   if (pollTimer) clearTimeout(pollTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   if (jumpSettleTimer) clearTimeout(jumpSettleTimer)
@@ -824,18 +1080,80 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 24px;
 }
-.nav-left { display: flex; align-items: center; gap: 16px; }
+.nav-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .back-btn {
   background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  flex-shrink: 0;
 }
 .back-btn:hover { background: rgba(255,255,255,0.1); }
 .nav-right { display: flex; align-items: center; gap: 12px; }
-.book-title { font-weight: 600; font-size: 15px; }
+.book-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lang-badge {
   font-size: 11px; padding: 2px 8px; border-radius: 10px;
   background: #FF4500; color: #fff; font-weight: 600;
+  flex-shrink: 0;
 }
+.reader-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-input-wrap {
+  width: 260px; height: 32px; display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; border: 1px solid rgba(255,255,255,0.24); border-radius: 6px;
+  background: rgba(255,255,255,0.08); color: #fff; transition: all 0.15s;
+}
+.search-input-wrap.active,
+.search-input-wrap:focus-within {
+  border-color: rgba(255,255,255,0.55); background: rgba(255,255,255,0.14);
+}
+.search-icon { color: rgba(255,255,255,0.7); font-size: 14px; line-height: 1; }
+.search-input {
+  min-width: 0; flex: 1; border: none; outline: none; background: transparent;
+  color: #fff; font-size: 13px;
+}
+.search-input::placeholder { color: rgba(255,255,255,0.58); }
+.search-input::-webkit-search-cancel-button { display: none; }
+.search-clear {
+  width: 20px; height: 20px; border: none; border-radius: 50%; background: rgba(255,255,255,0.16);
+  color: rgba(255,255,255,0.86); cursor: pointer; line-height: 1; font-size: 16px;
+}
+.search-clear:hover { background: rgba(255,255,255,0.28); color: #fff; }
+.search-controls { display: flex; align-items: center; gap: 6px; color: rgba(255,255,255,0.78); }
+.search-nav-btn {
+  width: 24px; height: 24px; border: 1px solid rgba(255,255,255,0.22); border-radius: 5px;
+  background: transparent; color: #fff; cursor: pointer; font-size: 16px; line-height: 1;
+}
+.search-nav-btn:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
+.search-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.search-count { min-width: 66px; font-size: 11px; font-family: monospace; text-align: center; }
+.search-results {
+  position: absolute; top: calc(100% + 8px); right: 0; width: 430px; max-height: 420px;
+  overflow-y: auto; background: #fff; border: 1px solid #E0E0E0; border-radius: 8px;
+  box-shadow: 0 14px 36px rgba(0,0,0,0.2); z-index: 80; padding: 6px;
+}
+.search-empty {
+  padding: 18px 14px; color: #777; font-size: 13px; text-align: center;
+}
+.search-result {
+  width: 100%; display: flex; gap: 10px; padding: 10px; border: none; border-radius: 6px;
+  background: transparent; text-align: left; cursor: pointer; color: #222;
+}
+.search-result:hover,
+.search-result.active { background: #F8F8F8; }
+.search-result-kind {
+  flex: 0 0 46px; align-self: flex-start; padding: 3px 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; text-align: center; text-transform: uppercase;
+}
+.search-result.node .search-result-kind { color: #7B2D8E; background: #F5EAF8; }
+.search-result.edge .search-result-kind { color: #E91E63; background: #FCE4EC; }
+.search-result.body .search-result-kind { color: #FF4500; background: #FFF3E0; }
+.search-result-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.search-result-title { font-size: 13px; font-weight: 700; color: #222; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-subtitle { font-size: 11px; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-snippet { font-size: 12px; color: #555; line-height: 1.45; }
 .chapters-btn {
   background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;

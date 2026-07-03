@@ -3,6 +3,41 @@
     <div class="panel-header">
       <span class="panel-title">{{ $t('graph.panelTitle') }}</span>
       <div class="header-tools">
+        <div class="reveal-control" ref="revealControl">
+          <button
+            class="tool-btn reveal-tool"
+            :class="{ active: revealMenuOpen }"
+            :disabled="!episodeCount"
+            @click.stop="revealMenuOpen = !revealMenuOpen"
+            :title="$t('graph.revealTitle')"
+          >
+            <span>◫</span>
+            <span class="btn-text">{{ $t('graph.revealButton', { current: revealDisplay, total: episodeCount }) }}</span>
+          </button>
+          <div v-if="revealMenuOpen" class="reveal-popover" @click.stop>
+            <div class="reveal-popover-title">{{ $t('graph.revealTitle') }}</div>
+            <div class="reveal-popover-value">
+              {{ $t('graph.revealUpTo', { n: revealDisplay, title: revealEpisodeTitle }) }}
+            </div>
+            <div class="reveal-slider-row">
+              <button class="reveal-step" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
+              <input
+                class="reveal-slider"
+                type="range"
+                min="1"
+                :max="Math.max(episodeCount, 1)"
+                :value="revealDisplay"
+                :disabled="!episodeCount"
+                @input="setRevealFromInput"
+              />
+              <button class="reveal-step" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
+            </div>
+            <div class="reveal-actions">
+              <button class="reveal-action" @click="setRevealToCurrent">{{ $t('graph.revealCurrent') }}</button>
+              <button class="reveal-action" @click="setRevealToLatest">{{ $t('graph.revealLatest') }}</button>
+            </div>
+          </div>
+        </div>
         <button class="tool-btn" @click="$emit('refresh')" :disabled="loading" :title="$t('graph.refreshGraph')">
           <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
           <span class="btn-text">{{ $t('graph.refreshGraph') }}</span>
@@ -94,9 +129,6 @@
             <div class="edge-reel" v-if="nodeEdges.length">
               <div class="reel-header">
                 <span class="section-title">{{ $t('graph.relationships') }} ({{ nodeEdges.length }})</span>
-                <button class="reel-play" @click="toggleAutoplay" :title="$t('graph.autoScroll')">
-                  {{ autoplay ? '⏸' : '▶' }}
-                </button>
               </div>
               <div class="reel-hint">{{ $t('graph.reelHint') }}</div>
               <div class="reel-list" ref="reelList">
@@ -214,6 +246,7 @@
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import * as d3 from 'd3'
 import { graphDensityMessage, shouldAutoHideEdgeLabels } from '../utils/graphPerformance'
+import { clampRevealMax } from '../utils/revealProgress'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
@@ -223,24 +256,26 @@ const props = defineProps({
   loading: Boolean,
   extractProgress: { type: Object, default: null },
   seenEdges: { type: Array, default: () => [] },  // 已查看关系 id（节点已读由此派生）
-  selectRequest: { type: Object, default: null }  // 外部请求选中 { type, id, nonce }
+  selectRequest: { type: Object, default: null },  // 外部请求选中 { type, id, nonce }
+  latestReadEpisode: { type: Number, default: 0 }
 })
 
 const emit = defineEmits([
   'refresh', 'toggle-maximize', 'jump',
-  'seen-edge', 'set-edge-seen'
+  'seen-edge', 'set-edge-seen', 'set-reveal-max'
 ])
 
 const graphContainer = ref(null)
 const graphSvg = ref(null)
+const revealControl = ref(null)
 const reelList = ref(null)
 const detailContent = ref(null)
 const selectedItem = ref(null)
 const showEdgeLabels = ref(true)
 const edgeLabelsUserOverrode = ref(false)
 const activeReelIndex = ref(0)
-const autoplay = ref(false)
 const focusUnread = ref(false)
+const revealMenuOpen = ref(false)
 // 只显示当前章节的图谱（关系/实体过多时更快）；关闭时为累计视图
 const chapterOnly = ref(false)
 // 实体类型图例：可收起，点击某类型高亮该类全部实体
@@ -258,6 +293,39 @@ const HL_ACTIVE = '#FF4500'
 
 // 位置缓存，保证逐章展开时已有节点位置稳定
 const positionCache = new Map()
+
+const episodeCount = computed(() => props.episodes?.length || 0)
+const currentRevealIndex = computed(() => clampRevealMax(props.currentEpisode ?? 0, episodeCount.value))
+const revealDisplay = computed(() => episodeCount.value ? currentRevealIndex.value + 1 : 0)
+const revealEpisodeTitle = computed(() =>
+  props.episodes?.[currentRevealIndex.value]?.title || `#${revealDisplay.value}`
+)
+
+const emitRevealMax = (idx) => {
+  emit('set-reveal-max', clampRevealMax(idx, episodeCount.value))
+}
+
+const setRevealFromInput = (e) => {
+  emitRevealMax(Number(e.target.value) - 1)
+}
+
+const stepReveal = (delta) => {
+  emitRevealMax(currentRevealIndex.value + delta)
+}
+
+const setRevealToCurrent = () => {
+  emitRevealMax(props.viewEpisode ?? 0)
+}
+
+const setRevealToLatest = () => {
+  emitRevealMax(props.latestReadEpisode ?? 0)
+}
+
+const onDocumentMouseDown = (e) => {
+  if (!revealMenuOpen.value) return
+  if (revealControl.value && revealControl.value.contains(e.target)) return
+  revealMenuOpen.value = false
+}
 
 // ---------- 可见子图（按阅读进度过滤） ----------
 const mentionedIn = (item, ep) => (item.mentions || []).some(m => m.episode === ep)
@@ -415,7 +483,6 @@ const jumpTo = (mention) => {
 
 const closeDetailPanel = () => {
   selectedItem.value = null
-  autoplay.value = false
   activeType.value = null
   clearGraphHighlight()
 }
@@ -499,6 +566,14 @@ const highlightType = (typeName) => {
   applyTypeHighlight()
 }
 
+const selectedItemVisible = () => {
+  const sel = selectedItem.value
+  if (!sel) return true
+  if (sel.type === 'node') return visibleNodes.value.some(n => n.id === sel.node.id)
+  if (sel.type === 'edge') return visibleEdges.value.some(e => e.id === sel.edge.id)
+  return true
+}
+
 const highlightEdge = (edgeId) => {
   clearGraphHighlight()
   if (!linkSel) return
@@ -540,7 +615,6 @@ const selectNode = (node) => {
     color: colorForType(node.type)
   }
   activeReelIndex.value = 0
-  autoplay.value = false
   activeType.value = null
   highlightNode(node.id)
   nextTick(() => {
@@ -821,7 +895,6 @@ const scrollReelToActive = () => {
 
 let reelScrollRaf = null
 const onReelScroll = () => {
-  if (autoplay.value) return
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
   reelScrollRaf = requestAnimationFrame(() => {
     reelScrollRaf = null
@@ -855,22 +928,6 @@ const onReelScroll = () => {
   })
 }
 
-let autoplayTimer = null
-const toggleAutoplay = () => {
-  autoplay.value = !autoplay.value
-  if (autoplay.value) {
-    autoplayTimer = setInterval(() => {
-      if (!nodeEdges.value.length) return
-      activeReelIndex.value = (activeReelIndex.value + 1) % nodeEdges.value.length
-      highlightActiveReel()
-      scrollReelToActive()
-    }, 2000)
-  } else if (autoplayTimer) {
-    clearInterval(autoplayTimer)
-    autoplayTimer = null
-  }
-}
-
 const onKey = (e) => {
   if (!selectedItem.value || selectedItem.value.type !== 'node' || !nodeEdges.value.length) return
   if (e.key === 'ArrowDown') { e.preventDefault(); setActiveReel((activeReelIndex.value + 1) % nodeEdges.value.length) }
@@ -879,7 +936,10 @@ const onKey = (e) => {
 
 // ---------- watchers ----------
 const revealKey = computed(() => `${visibleNodes.value.length}_${visibleEdges.value.length}_${props.currentEpisode}_${chapterOnly.value ? 'c' + (props.viewEpisode ?? 0) : 'a'}`)
-watch(revealKey, () => { nextTick(renderGraph) })
+watch(revealKey, () => {
+  if (!selectedItemVisible()) selectedItem.value = null
+  nextTick(renderGraph)
+})
 watch(() => props.graphData, () => { nextTick(renderGraph) }, { deep: false })
 
 watch(showEdgeLabels, (v) => {
@@ -903,14 +963,15 @@ const handleResize = () => nextTick(renderGraph)
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', onKey)
+  document.addEventListener('mousedown', onDocumentMouseDown)
   nextTick(renderGraph)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', onKey)
+  document.removeEventListener('mousedown', onDocumentMouseDown)
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
-  if (autoplayTimer) clearInterval(autoplayTimer)
   if (simulation) simulation.stop()
 })
 </script>
@@ -948,9 +1009,41 @@ onUnmounted(() => {
   cursor: pointer; color: #666; transition: all 0.2s; font-size: 13px;
 }
 .tool-btn:hover { background: #F5F5F5; color: #000; border-color: #CCC; }
+.tool-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.tool-btn:disabled:hover { background: #FFF; color: #666; border-color: #E0E0E0; }
 .tool-btn .btn-text { font-size: 12px; }
 .icon-refresh.spinning { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.reveal-control { position: relative; }
+.reveal-tool { min-width: 112px; }
+.reveal-popover {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  width: 280px; padding: 12px;
+  background: #FFF; border: 1px solid #E0E0E0; border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.12); color: #222; z-index: 40;
+}
+.reveal-popover-title {
+  font-size: 12px; font-weight: 700; color: #7B2D8E;
+  text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px;
+}
+.reveal-popover-value {
+  font-size: 12px; color: #555; line-height: 1.45; margin-bottom: 10px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reveal-slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.reveal-slider { flex: 1; accent-color: #7B2D8E; cursor: pointer; }
+.reveal-step {
+  width: 28px; height: 28px; border: 1px solid #E0E0E0; border-radius: 6px;
+  background: #FFF; color: #555; cursor: pointer; font-size: 16px; line-height: 1;
+}
+.reveal-step:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
+.reveal-actions { display: flex; gap: 8px; }
+.reveal-action {
+  flex: 1; height: 28px; border: 1px solid #E0E0E0; border-radius: 6px;
+  background: #FAFAFA; color: #444; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.reveal-action:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
 
 .graph-container { width: 100%; height: 100%; }
 .graph-view, .graph-svg { width: 100%; height: 100%; display: block; }
@@ -1085,11 +1178,6 @@ input:checked + .slider:before { transform: translateX(18px); }
 /* Edge Reel */
 .edge-reel { margin-top: 14px; border-top: 1px solid #F0F0F0; padding-top: 8px; }
 .reel-header { display: flex; align-items: center; justify-content: space-between; }
-.reel-play {
-  width: 26px; height: 26px; border-radius: 50%; border: 1px solid #E0E0E0;
-  background: #FFF; cursor: pointer; color: #7B2D8E; font-size: 12px;
-}
-.reel-play:hover { background: #F5F0F8; }
 .reel-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
 .reel-list { }
 .reel-item {
