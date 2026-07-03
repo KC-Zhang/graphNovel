@@ -100,6 +100,7 @@
                   :key="er.edge.id"
                   class="reel-item"
                   :class="{ active: i === activeReelIndex }"
+                  @mouseenter="setActiveReel(i, { scroll: false })"
                   @click="setActiveReel(i)"
                 >
                   <div class="reel-item-relation">
@@ -753,10 +754,11 @@ const highlightActiveReel = () => {
   highlightNode(nodeId, er ? er.edge.id : null)
 }
 
-const setActiveReel = (i) => {
+const setActiveReel = (i, { scroll = true } = {}) => {
+  if (i < 0 || i >= nodeEdges.value.length) return
   activeReelIndex.value = i
   highlightActiveReel()
-  scrollReelToActive()
+  if (scroll) scrollReelToActive()
 }
 
 // 关系列表已不再单独滚动，随详情面板（.detail-content）一起滚动
@@ -777,18 +779,30 @@ const onReelScroll = () => {
   if (autoplay.value) return
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
   reelScrollRaf = requestAnimationFrame(() => {
+    reelScrollRaf = null
     const list = reelList.value
     const scroller = detailContent.value
     if (!list || !scroller) return
+    const children = Array.from(list.children)
+    if (!children.length) return
+
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+    let best = -1
+    if (maxScrollTop > 0 && scroller.scrollTop >= maxScrollTop - 2) {
+      best = children.length - 1
+    }
+
     const scRect = scroller.getBoundingClientRect()
     const center = scRect.top + scroller.clientHeight / 2
-    let best = -1, bestDist = Infinity
-    Array.from(list.children).forEach((child, i) => {
-      const r = child.getBoundingClientRect()
-      const mid = r.top + r.height / 2
-      const dist = Math.abs(mid - center)
-      if (dist < bestDist) { bestDist = dist; best = i }
-    })
+    if (best < 0) {
+      let bestDist = Infinity
+      children.forEach((child, i) => {
+        const r = child.getBoundingClientRect()
+        const mid = r.top + r.height / 2
+        const dist = Math.abs(mid - center)
+        if (dist < bestDist) { bestDist = dist; best = i }
+      })
+    }
     if (best >= 0 && best !== activeReelIndex.value) {
       activeReelIndex.value = best
       highlightActiveReel()
@@ -844,6 +858,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', onKey)
+  if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
   if (autoplayTimer) clearInterval(autoplayTimer)
   if (simulation) simulation.stop()
 })
