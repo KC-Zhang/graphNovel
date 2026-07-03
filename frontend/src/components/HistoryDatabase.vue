@@ -194,7 +194,7 @@ const formatTime = (dateStr) => {
 const getFileType = (filename) => {
   if (!filename) return 'other'
   const ext = filename.split('.').pop()?.toLowerCase()
-  const typeMap = { pdf: 'pdf', txt: 'txt', md: 'txt', markdown: 'txt' }
+  const typeMap = { pdf: 'pdf', epub: 'epub', txt: 'txt', md: 'txt', markdown: 'txt' }
   return typeMap[ext] || 'other'
 }
 const getFileTypeLabel = (filename) => {
@@ -344,6 +344,7 @@ onUnmounted(() => {
 .file-item:hover { background: rgba(255,255,255,1); transform: translateX(2px); }
 .file-tag { display: inline-flex; align-items: center; justify-content: center; height: 16px; padding: 0 4px; border-radius: 2px; font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; font-weight: 600; line-height: 1; text-transform: uppercase; flex-shrink: 0; min-width: 28px; }
 .file-tag.pdf { background: #f2e6e6; color: #a65a5a; }
+.file-tag.epub { background: #e8f0ec; color: #42745d; }
 .file-tag.txt { background: #f0f0f0; color: #757575; }
 .file-tag.other { background: #f3f4f6; color: #6b7280; }
 .file-name { font-family: 'Inter', sans-serif; font-size: 0.7rem; color: #4b5563; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

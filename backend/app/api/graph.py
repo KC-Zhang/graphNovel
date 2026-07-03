@@ -172,7 +172,7 @@ def repair_project(project_id: str):
 @graph_bp.route('/upload', methods=['POST'])
 def upload_book():
     """
-    上传书籍文件（PDF/TXT/MD），解析文本并切分为章节。
+    上传书籍文件（PDF/EPUB/TXT/MD），解析文本并切分为章节。
 
     请求方式：multipart/form-data
     参数：

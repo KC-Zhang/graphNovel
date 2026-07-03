@@ -36,7 +36,7 @@ class Config:
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
     # 上传目录：生产环境可通过 UPLOAD_FOLDER 指向持久化磁盘，未设置时回退到本地默认路径
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or os.path.join(os.path.dirname(__file__), '../uploads')
-    ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
+    ALLOWED_EXTENSIONS = {'pdf', 'epub', 'md', 'txt', 'markdown'}
 
     # CORS 配置：开发默认允许本地 Vite；生产环境通过 CORS_ORIGINS 显式配置。
     _DEFAULT_CORS = (

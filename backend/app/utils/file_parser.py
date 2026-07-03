@@ -1,11 +1,18 @@
 """
 文件解析工具
-支持PDF、Markdown、TXT文件的文本提取
+支持PDF、EPUB、Markdown、TXT文件的文本提取
 """
 
+import html
 import os
+import posixpath
+import re
+import zipfile
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import List, Optional
+from typing import List
+from urllib.parse import unquote
+import xml.etree.ElementTree as ET
 
 
 def _read_text_with_fallback(file_path: str) -> str:
@@ -58,10 +65,91 @@ def _read_text_with_fallback(file_path: str) -> str:
     return data.decode(encoding, errors='replace')
 
 
+def _local_name(tag: str) -> str:
+    """Return an XML tag name without its namespace."""
+    return tag.rsplit('}', 1)[-1] if '}' in tag else tag
+
+
+def _normalize_epub_path(path: str) -> str:
+    """Normalize an internal EPUB ZIP path."""
+    return posixpath.normpath(unquote(path).lstrip('/'))
+
+
+def _resolve_epub_href(base_dir: str, href: str) -> str:
+    """Resolve an OPF-relative href to an internal EPUB ZIP path."""
+    clean_href = unquote(href.split('#', 1)[0])
+    if not clean_href:
+        return ''
+    if clean_href.startswith('/'):
+        return _normalize_epub_path(clean_href)
+    return _normalize_epub_path(posixpath.join(base_dir, clean_href))
+
+
+def _is_epub_text_item(path: str, media_type: str) -> bool:
+    suffix = Path(path).suffix.lower()
+    return media_type in {'application/xhtml+xml', 'text/html'} or suffix in {'.xhtml', '.html', '.htm'}
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Small dependency-free XHTML/HTML to plain-text extractor."""
+
+    _BLOCK_TAGS = {
+        'address', 'article', 'aside', 'blockquote', 'br', 'dd', 'div', 'dl', 'dt',
+        'figcaption', 'figure', 'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header',
+        'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'tbody', 'td',
+        'tfoot', 'th', 'thead', 'tr', 'ul',
+    }
+    _IGNORED_TAGS = {'head', 'script', 'style', 'svg'}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+        self._ignore_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag in self._IGNORED_TAGS:
+            self._ignore_depth += 1
+        if self._ignore_depth == 0 and tag in self._BLOCK_TAGS:
+            self._append_break()
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in self._IGNORED_TAGS and self._ignore_depth:
+            self._ignore_depth -= 1
+        if self._ignore_depth == 0 and tag in self._BLOCK_TAGS:
+            self._append_break()
+
+    def handle_data(self, data):
+        if self._ignore_depth:
+            return
+        text = html.unescape(data)
+        if text.strip():
+            self.parts.append(text)
+
+    def _append_break(self):
+        if self.parts and self.parts[-1] != '\n':
+            self.parts.append('\n')
+
+    def text(self) -> str:
+        text = ''.join(self.parts)
+        text = re.sub(r'[ \t\r\f\v]+', ' ', text)
+        text = re.sub(r' *\n *', '\n', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
+
+def _html_to_text(source: str) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(source)
+    parser.close()
+    return parser.text()
+
+
 class FileParser:
     """文件解析器"""
     
-    SUPPORTED_EXTENSIONS = {'.pdf', '.md', '.markdown', '.txt'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.epub', '.md', '.markdown', '.txt'}
     
     @classmethod
     def is_supported(cls, file_path: str) -> bool:
@@ -100,6 +188,8 @@ class FileParser:
         
         if suffix == '.pdf':
             return cls._extract_from_pdf(file_path)
+        elif suffix == '.epub':
+            return cls._extract_from_epub(file_path)
         elif suffix in {'.md', '.markdown'}:
             return cls._extract_from_md(file_path)
         elif suffix == '.txt':
@@ -123,6 +213,86 @@ class FileParser:
                     text_parts.append(text)
         
         return "\n\n".join(text_parts)
+
+    @staticmethod
+    def _extract_from_epub(file_path: str) -> str:
+        """从EPUB提取文本，按书籍 spine 顺序读取 XHTML/HTML 内容。"""
+        try:
+            with zipfile.ZipFile(file_path) as book:
+                opf_path = FileParser._epub_rootfile_path(book)
+                item_paths = FileParser._epub_spine_item_paths(book, opf_path)
+                text_parts = []
+                for item_path in item_paths:
+                    try:
+                        content = book.read(item_path)
+                    except KeyError:
+                        continue
+                    text = _html_to_text(content.decode('utf-8', errors='replace'))
+                    if text:
+                        text_parts.append(text)
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f"无效的 EPUB 文件: {file_path}") from exc
+
+        return "\n\n".join(text_parts)
+
+    @staticmethod
+    def _epub_rootfile_path(book: zipfile.ZipFile) -> str:
+        """读取 EPUB container.xml 中声明的 OPF 路径。"""
+        try:
+            container = ET.fromstring(book.read('META-INF/container.xml'))
+        except KeyError as exc:
+            raise ValueError("EPUB 缺少 META-INF/container.xml") from exc
+        except ET.ParseError as exc:
+            raise ValueError("EPUB container.xml 无法解析") from exc
+
+        for elem in container.iter():
+            if _local_name(elem.tag) == 'rootfile':
+                full_path = elem.attrib.get('full-path')
+                if full_path:
+                    return _normalize_epub_path(full_path)
+
+        raise ValueError("EPUB container.xml 未声明 rootfile")
+
+    @staticmethod
+    def _epub_spine_item_paths(book: zipfile.ZipFile, opf_path: str) -> List[str]:
+        """解析 OPF manifest/spine，返回阅读顺序中的 HTML 文档路径。"""
+        try:
+            package = ET.fromstring(book.read(opf_path))
+        except KeyError as exc:
+            raise ValueError(f"EPUB 缺少 OPF 文件: {opf_path}") from exc
+        except ET.ParseError as exc:
+            raise ValueError("EPUB OPF 文件无法解析") from exc
+
+        opf_dir = posixpath.dirname(opf_path)
+        manifest = {}
+        for elem in package.iter():
+            if _local_name(elem.tag) != 'item':
+                continue
+            item_id = elem.attrib.get('id')
+            href = elem.attrib.get('href')
+            media_type = elem.attrib.get('media-type', '')
+            if item_id and href:
+                manifest[item_id] = {
+                    'path': _resolve_epub_href(opf_dir, href),
+                    'media_type': media_type,
+                }
+
+        paths = []
+        for elem in package.iter():
+            if _local_name(elem.tag) != 'itemref':
+                continue
+            item = manifest.get(elem.attrib.get('idref'))
+            if item and _is_epub_text_item(item['path'], item['media_type']):
+                paths.append(item['path'])
+
+        if paths:
+            return paths
+
+        return [
+            item['path']
+            for item in manifest.values()
+            if _is_epub_text_item(item['path'], item['media_type'])
+        ]
     
     @staticmethod
     def _extract_from_md(file_path: str) -> str:
@@ -200,4 +370,3 @@ def split_text_into_chunks(
         start = end - overlap if end < len(text) else len(text)
     
     return chunks
-
