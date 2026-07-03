@@ -99,6 +99,7 @@
     "revealNote": "Graph revealed up to episode {n}",
     "chapters": "Chapters",
     "chaptersRead": "{read}/{total} read",
+    "readPercent": "{pct}% read",
     "markRead": "Read",
     "viewInGraph": "View in graph",
     "reviewChapters": "Review detected chapters",

@@ -99,6 +99,7 @@
     "revealNote": "图谱已展开至第 {n} 章",
     "chapters": "目录",
     "chaptersRead": "已读 {read}/{total}",
+    "readPercent": "已读 {pct}%",
     "markRead": "已读",
     "viewInGraph": "在图谱中查看",
     "reviewChapters": "确认章节切分",

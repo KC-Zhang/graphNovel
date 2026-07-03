@@ -3,16 +3,20 @@
  * 记录（按书 projectId 存于 localStorage）：
  * - readEpisodes: 已读章节索引
  * - seenEdges: 已查看的关系 id（节点已读状态由其关系派生，不单独记录）
+ * - episodeRanges: 每章真正浏览过的归一化竖向区间（用于覆盖率/进度条）
  * - revealMax / viewEpisode: 阅读位置（用于回到上次进度）
  *
- * 说明：集合使用 ref(new Set())，变更时重新赋值一个新 Set 以触发 Vue 响应式。
+ * 说明：集合使用 ref(new Set())，变更时重新赋值一个新 Set 以触发 Vue 响应式；
+ * episodeRanges 使用普通对象 ref，变更时重新赋值一个新对象以触发响应式。
  */
 import { ref, watch } from 'vue'
+import { addInterval, coverage, FULL_READ_COVERAGE } from '../utils/readProgress'
 
 const STORAGE_PREFIX = 'bookmiro:progress:'
 
 const readEpisodes = ref(new Set())
 const seenEdges = ref(new Set())
+const episodeRanges = ref({})
 const revealMax = ref(0)
 const viewEpisode = ref(0)
 
@@ -26,6 +30,7 @@ const persist = () => {
   const payload = {
     readEpisodes: [...readEpisodes.value],
     seenEdges: [...seenEdges.value],
+    episodeRanges: episodeRanges.value,
     revealMax: revealMax.value,
     viewEpisode: viewEpisode.value,
   }
@@ -42,7 +47,7 @@ const schedulePersist = () => {
 }
 
 // 监听所有进度变化，自动保存
-watch([readEpisodes, seenEdges, revealMax, viewEpisode], schedulePersist, { deep: false })
+watch([readEpisodes, seenEdges, episodeRanges, revealMax, viewEpisode], schedulePersist, { deep: false })
 
 export function useReadingProgress() {
   const load = (projectId) => {
@@ -56,6 +61,7 @@ export function useReadingProgress() {
     }
     readEpisodes.value = new Set(data?.readEpisodes || [])
     seenEdges.value = new Set(data?.seenEdges || [])
+    episodeRanges.value = data?.episodeRanges && typeof data.episodeRanges === 'object' ? { ...data.episodeRanges } : {}
     revealMax.value = data?.revealMax || 0
     viewEpisode.value = data?.viewEpisode || 0
   }
@@ -67,6 +73,7 @@ export function useReadingProgress() {
     }
     readEpisodes.value = new Set()
     seenEdges.value = new Set()
+    episodeRanges.value = {}
     revealMax.value = 0
     viewEpisode.value = 0
   }
@@ -85,9 +92,21 @@ export function useReadingProgress() {
   const isEpisodeRead = (i) => readEpisodes.value.has(i)
   const isEdgeSeen = (id) => seenEdges.value.has(id)
 
+  const getEpisodeRanges = (i) => episodeRanges.value[i] || []
+
+  // 将当前视口区间并入某章覆盖集合；覆盖率达阈值时自动标记整章已读
+  const addEpisodeRange = (i, interval) => {
+    const merged = addInterval(episodeRanges.value[i], interval)
+    episodeRanges.value = { ...episodeRanges.value, [i]: merged }
+    if (coverage(merged) >= FULL_READ_COVERAGE) markEpisodeRead(i, true)
+  }
+
+  const episodeCoverage = (i) => coverage(episodeRanges.value[i])
+
   return {
     readEpisodes,
     seenEdges,
+    episodeRanges,
     revealMax,
     viewEpisode,
     load,
@@ -96,5 +115,8 @@ export function useReadingProgress() {
     markEdgeSeen,
     isEpisodeRead,
     isEdgeSeen,
+    getEpisodeRanges,
+    addEpisodeRange,
+    episodeCoverage,
   }
 }

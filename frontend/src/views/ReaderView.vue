@@ -28,11 +28,12 @@
             v-for="(ep, i) in episodes"
             :key="i"
             class="chapter-item"
-            :class="{ current: i === viewEpisode, read: isEpisodeRead(i) }"
+            :class="[chapterState(i), { current: i === viewEpisode }]"
             @click="jumpToChapter(i)"
           >
-            <span class="chapter-check">{{ isEpisodeRead(i) ? '✓' : '' }}</span>
+            <span class="chapter-check">{{ chapterState(i) === 'read' ? '✓' : (chapterState(i) === 'partial' ? '◐' : '') }}</span>
             <span class="chapter-title">{{ ep.title }}</span>
+            <span class="chapter-pct">{{ chapterState(i) === 'read' ? '' : (chapterState(i) === 'partial' ? chapterPercent(i) + '%' : '') }}</span>
           </div>
         </div>
       </div>
@@ -92,43 +93,73 @@
           </div>
         </div>
 
-        <div class="book-text" ref="bookText" @scroll="onBookScroll">
-          <p
-            v-for="(para, i) in renderedParagraphs"
-            :key="i"
-            class="para"
+        <div class="book-scroll">
+          <div class="book-text" ref="bookText" @scroll="onBookScroll">
+            <p
+              v-for="(para, i) in renderedParagraphs"
+              :key="i"
+              class="para"
+            >
+              <template v-for="(seg, j) in para" :key="j">
+                <span
+                  v-if="seg.link"
+                  class="text-link"
+                  :class="{
+                    'quote-mark': seg.mark,
+                    'link-edge': seg.link.type === 'edge',
+                    'link-seen': linkSeen(seg.link),
+                    'link-unseen': !linkSeen(seg.link)
+                  }"
+                  :data-edge-id="seg.link.type === 'edge' ? seg.link.id : null"
+                  :title="linkTitle(seg.link)"
+                  @click="goToGraph(seg.link)"
+                >{{ seg.text }}</span>
+                <mark v-else-if="seg.mark" class="quote-mark">{{ seg.text }}</mark>
+                <span v-else>{{ seg.text }}</span>
+              </template>
+            </p>
+          </div>
+          <!-- 阅读进度轨：已浏览段 + 当前视口标记（可点击/拖拽滚动） -->
+          <div
+            class="read-rail"
+            :title="$t('reader.readPercent', { pct: chapterPercent(viewEpisode) })"
+            @mousedown="onRailPointerDown"
           >
-            <template v-for="(seg, j) in para" :key="j">
-              <span
-                v-if="seg.link"
-                class="text-link"
-                :class="{
-                  'quote-mark': seg.mark,
-                  'link-edge': seg.link.type === 'edge',
-                  'link-seen': linkSeen(seg.link),
-                  'link-unseen': !linkSeen(seg.link)
-                }"
-                :data-edge-id="seg.link.type === 'edge' ? seg.link.id : null"
-                :title="linkTitle(seg.link)"
-                @click="goToGraph(seg.link)"
-              >{{ seg.text }}</span>
-              <mark v-else-if="seg.mark" class="quote-mark">{{ seg.text }}</mark>
-              <span v-else>{{ seg.text }}</span>
-            </template>
-          </p>
+            <div
+              v-for="(seg, i) in railSegments"
+              :key="i"
+              class="read-rail-seg"
+              :style="{ top: seg.top + '%', height: seg.height + '%' }"
+            ></div>
+            <div
+              class="read-rail-view"
+              :style="{ top: viewportMarker.top + '%', height: viewportMarker.height + '%' }"
+            ></div>
+          </div>
         </div>
 
         <!-- 章节导航 -->
         <div class="episode-nav">
           <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode">‹ {{ $t('reader.prev') }}</button>
-          <input
-            class="episode-scrubber"
-            type="range"
-            min="0"
-            :max="Math.max(episodes.length - 1, 0)"
-            :value="viewEpisode"
-            @input="onScrub"
-          />
+          <div class="scrubber-wrap">
+            <div class="scrubber-track">
+              <div
+                v-for="(pct, i) in chapterProgress"
+                :key="i"
+                class="scrubber-seg"
+                :class="chapterState(i)"
+                :style="{ opacity: chapterState(i) === 'partial' ? (0.25 + pct * 0.75) : undefined }"
+              ></div>
+            </div>
+            <input
+              class="episode-scrubber"
+              type="range"
+              min="0"
+              :max="Math.max(episodes.length - 1, 0)"
+              :value="viewEpisode"
+              @input="onScrub"
+            />
+          </div>
           <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode">{{ $t('reader.next') }} ›</button>
         </div>
         <div class="reveal-note">
@@ -172,7 +203,8 @@ import {
 } from '../api/book'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
-import { createMentionIndex, findQuoteRange, shouldMarkLinkRead } from '../utils/readerLinks'
+import { createMentionIndex, findQuoteRange } from '../utils/readerLinks'
+import { visibleInterval, isRangeCovered } from '../utils/readProgress'
 
 const PREFETCH = 2
 
@@ -182,12 +214,37 @@ const { t } = useI18n()
 
 // 阅读进度（localStorage 持久化）
 const {
-  readEpisodes, seenEdges, revealMax, viewEpisode,
-  load: loadProgress, markEpisodeRead, markEdgeSeen, isEpisodeRead
+  readEpisodes, seenEdges, episodeRanges, revealMax, viewEpisode,
+  load: loadProgress, markEpisodeRead, markEdgeSeen, isEpisodeRead,
+  getEpisodeRanges, addEpisodeRange, episodeCoverage
 } = useReadingProgress()
 
 const seenEdgesArr = computed(() => [...seenEdges.value])
 const readCount = computed(() => readEpisodes.value.size)
+// 当前视口区间（用于阅读进度轨的视口标记）
+const viewportInterval = ref([0, 0])
+
+// 当前章节已浏览区间 -> 阅读进度轨的填充段
+const railSegments = computed(() =>
+  (episodeRanges.value[viewEpisode.value] || []).map(([s, e]) => ({
+    top: s * 100,
+    height: Math.max(0, (e - s) * 100),
+  }))
+)
+const viewportMarker = computed(() => {
+  const [s, e] = viewportInterval.value
+  return { top: s * 100, height: Math.max(1, (e - s) * 100) }
+})
+
+// 每章覆盖率（用于章节滑杆轨与目录状态）
+const chapterProgress = computed(() =>
+  episodes.value.map((_, i) => episodeCoverage(i))
+)
+const chapterState = (i) => {
+  if (isEpisodeRead(i)) return 'read'
+  return (chapterProgress.value[i] || 0) > 0.001 ? 'partial' : 'unread'
+}
+const chapterPercent = (i) => Math.round((chapterProgress.value[i] || 0) * 100)
 const showChapters = ref(false)
 const graphMaximized = ref(false)
 
@@ -364,6 +421,7 @@ const scrollToHighlight = () => {
   nextTick(() => {
     const el = document.querySelector('.book-text .quote-mark')
     if (!el) return
+    beginJumpScroll()
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     el.classList.remove('flash')
     // 触发重排以重启动画
@@ -411,6 +469,7 @@ const loadEpisodeText = async (idx) => {
 
 const setViewEpisode = async (idx) => {
   idx = Math.max(0, Math.min(idx, episodes.value.length - 1))
+  cancelDwell()
   viewEpisode.value = idx
   if (idx > revealMax.value) revealMax.value = idx
   highlightQuote.value = ''
@@ -427,43 +486,117 @@ const scrollBookTop = () => {
   })
 }
 
-// 章节较短（无需滚动）时，读到即视为已读
+// “已读”需要停留：只有在某屏停留超过 DWELL_READ_MS 才计入覆盖，
+// 这样快速划过（casual scroll）不会被误标为已读。
+const DWELL_READ_MS = 1200
+let dwellTimer = null
+
+// 刷新视口标记（跟随滚动，便于看到当前所在位置）
+const refreshViewportMarker = (el) => {
+  if (!el) return
+  viewportInterval.value = visibleInterval(el.scrollTop, el.clientHeight, el.scrollHeight)
+}
+
+// 停留计时：DWELL_READ_MS 内不再滚动，则把当前屏记入已读覆盖
+const scheduleDwellRecord = () => {
+  if (dwellTimer) clearTimeout(dwellTimer)
+  dwellTimer = setTimeout(() => {
+    dwellTimer = null
+    const el = document.querySelector('.book-text')
+    if (el) commitReadCoverage(el)
+  }, DWELL_READ_MS)
+}
+const cancelDwell = () => {
+  if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = null }
+}
+
+// 把当前视口区间并入本章覆盖，并推进链接已读状态（节点已读由此派生）
+const commitReadCoverage = (el) => {
+  if (!el) return
+  const iv = visibleInterval(el.scrollTop, el.clientHeight, el.scrollHeight)
+  addEpisodeRange(viewEpisode.value, iv)
+  markCoveredEdges(el)
+}
+
+// 章节打开时：更新标记并开始停留计时（短章停留后由 visibleInterval 返回 [0,1] 记为整章已读）
 const checkAutoRead = () => {
   nextTick(() => {
     const el = document.querySelector('.book-text')
-    if (el && el.scrollHeight <= el.clientHeight + 8) {
-      markEpisodeRead(viewEpisode.value, true)
-    }
+    if (!el) return
+    refreshViewportMarker(el)
+    scheduleDwellRecord()
   })
 }
 
-// 滚动到章节底部附近即自动标记为已读；滚过的关系链接自动标为已读
+// 程序化跳转（点击链接平滑滚动）期间，中间经过的位置不应记为已读；
+// 抑制覆盖累计，待滚动停止后仍需在落点停留 DWELL_READ_MS 才计入。
+let coverageSuppressed = false
+let jumpSettleTimer = null
+const beginJumpScroll = () => {
+  coverageSuppressed = true
+  if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = null }
+  cancelDwell()
+  scheduleJumpSettle()
+}
+const scheduleJumpSettle = () => {
+  if (jumpSettleTimer) clearTimeout(jumpSettleTimer)
+  jumpSettleTimer = setTimeout(() => {
+    jumpSettleTimer = null
+    coverageSuppressed = false
+    scheduleDwellRecord()
+  }, 250)
+}
+
+// 滚动时仅更新视口标记并重置停留计时；覆盖只在停留后累计
 let scrollRaf = null
 const onBookScroll = (e) => {
   const el = e.target
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
-    markEpisodeRead(viewEpisode.value, true)
-  }
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
-  scrollRaf = requestAnimationFrame(() => markScrolledPastEdges(el))
+  scrollRaf = requestAnimationFrame(() => refreshViewportMarker(el))
+  if (coverageSuppressed) {
+    scheduleJumpSettle()
+    return
+  }
+  scheduleDwellRecord()
 }
 
-// 将已滚出视口上沿的关系链接标为已读（节点已读由此派生）
-const markScrolledPastEdges = (el) => {
-  const top = el.getBoundingClientRect().top
+// 点击/拖拽阅读进度轨即滚动到对应位置（充当自定义滚动条）
+const scrollBookToClientY = (rail, clientY) => {
+  const el = document.querySelector('.book-text')
+  if (!el || !rail) return
+  const rect = rail.getBoundingClientRect()
+  const ratio = (clientY - rect.top) / rect.height
+  const max = el.scrollHeight - el.clientHeight
+  const target = ratio * el.scrollHeight - el.clientHeight / 2
+  el.scrollTop = Math.max(0, Math.min(max, target))
+}
+const onRailPointerDown = (e) => {
+  const rail = e.currentTarget
+  e.preventDefault()
+  scrollBookToClientY(rail, e.clientY)
+  const onMove = (ev) => scrollBookToClientY(rail, ev.clientY)
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+// 关系链接只有当其自身竖向范围完整落入本章已浏览区间时才标为已读；
+// 这样中途被链接跳入章节时，上方未浏览的链接不会被误清。
+const markCoveredEdges = (el) => {
+  const h = el.scrollHeight
+  if (!h) return
+  const ranges = getEpisodeRanges(viewEpisode.value)
   el.querySelectorAll('.text-link.link-edge').forEach(node => {
     const id = node.getAttribute('data-edge-id')
     if (!id || seenEdges.value.has(id)) return
-    if (shouldMarkLinkRead({ linkBottom: node.getBoundingClientRect().bottom, viewportTop: top })) {
+    const top = node.offsetTop / h
+    const bottom = (node.offsetTop + node.offsetHeight) / h
+    if (isRangeCovered(ranges, [top, bottom])) {
       markEdgeSeen(id, true)
     }
-  })
-}
-
-// 翻到下一章视为读完本页：标记本页所有关系链接为已读
-const markCurrentPageEdgesSeen = () => {
-  episodeLinks.value.forEach(l => {
-    if (l.type === 'edge' && !seenEdges.value.has(l.id)) markEdgeSeen(l.id, true)
   })
 }
 
@@ -478,7 +611,6 @@ const jumpToChapter = (i) => {
 
 const prevEpisode = () => setViewEpisode(viewEpisode.value - 1)
 const nextEpisode = () => {
-  markCurrentPageEdgesSeen()
   setViewEpisode(viewEpisode.value + 1)
 }
 const onScrub = (e) => setViewEpisode(parseInt(e.target.value, 10))
@@ -663,6 +795,8 @@ onMounted(() => {
 onUnmounted(() => {
   if (pollTimer) clearTimeout(pollTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
+  if (jumpSettleTimer) clearTimeout(jumpSettleTimer)
+  cancelDwell()
   flashTimers.forEach(clearTimeout)
 })
 </script>
@@ -716,8 +850,11 @@ onUnmounted(() => {
 .chapter-item:hover { background: #f5f5f5; }
 .chapter-item.current { background: #FFF3E0; font-weight: 600; }
 .chapter-item.read { color: #888; }
+.chapter-item.partial { color: #444; }
 .chapter-check { width: 16px; color: #FF4500; font-weight: 700; flex-shrink: 0; }
-.chapter-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-item.partial .chapter-check { color: #FFB74D; }
+.chapter-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-pct { flex-shrink: 0; font-size: 11px; color: #FFB74D; font-weight: 600; font-family: monospace; }
 
 /* 状态屏 */
 .status-screen { flex: 1; display: flex; align-items: center; justify-content: center; }
@@ -814,10 +951,30 @@ onUnmounted(() => {
 }
 .detail-close:hover { color: #333; }
 
+.book-scroll { flex: 1; display: flex; min-height: 0; }
 .book-text {
   flex: 1; overflow-y: auto; padding: 8px 32px 24px;
   line-height: 1.9; font-size: 16px; color: #2b2b2b;
   font-family: 'Noto Serif SC', 'Georgia', serif;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.book-text::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 阅读进度轨（“我读到哪了”，可点击/拖拽滚动） */
+.read-rail {
+  position: relative; flex: 0 0 10px; width: 10px; margin: 8px 6px 24px 0;
+  background: #f0f0f0; border-radius: 5px; overflow: hidden;
+  cursor: pointer; user-select: none;
+}
+.read-rail:hover { background: #e8e8e8; }
+.read-rail-seg {
+  position: absolute; left: 0; right: 0;
+  background: #FFCC80; border-radius: 5px; pointer-events: none;
+}
+.read-rail-view {
+  position: absolute; left: 0; right: 0;
+  background: rgba(255,69,0,0.55); border-radius: 5px; pointer-events: none;
+  transition: top 0.1s linear, height 0.1s linear;
 }
 .para { margin: 0 0 1.1em; text-align: justify; }
 .text-link { cursor: pointer; border-radius: 2px; transition: background 0.15s; }
@@ -853,7 +1010,16 @@ onUnmounted(() => {
 }
 .nav-arrow:hover:not(:disabled) { background: #f5f5f5; border-color: #bbb; }
 .nav-arrow:disabled { opacity: 0.4; cursor: not-allowed; }
-.episode-scrubber { flex: 1; accent-color: #FF4500; cursor: pointer; }
+.scrubber-wrap { flex: 1; position: relative; display: flex; align-items: center; }
+.scrubber-track {
+  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+  height: 6px; display: flex; gap: 1px; border-radius: 3px; overflow: hidden;
+  pointer-events: none;
+}
+.scrubber-seg { flex: 1 1 0; min-width: 0; background: #e6e6e6; }
+.scrubber-seg.partial { background: #FFB74D; }
+.scrubber-seg.read { background: #FF4500; opacity: 1; }
+.episode-scrubber { position: relative; flex: 1; background: transparent; accent-color: #FF4500; cursor: pointer; }
 .reveal-note {
   font-size: 11px; color: #aaa; text-align: center; padding: 0 32px 12px; flex-shrink: 0;
 }
