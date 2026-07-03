@@ -340,6 +340,7 @@
     "graphDataLoading": "Loading graph data...",
     "waitingOntology": "Waiting for the graph...",
     "emptyReveal": "Keep reading to reveal the graph",
+    "extractError": "Entity extraction failed: {error}",
     "toggleMaximize": "Maximize/Restore",
     "entityTypes": "Entity Types",
     "showEdgeLabels": "Show Edge Labels",

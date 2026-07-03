@@ -340,6 +340,7 @@
     "graphDataLoading": "图谱数据加载中...",
     "waitingOntology": "等待图谱...",
     "emptyReveal": "继续阅读以展开图谱",
+    "extractError": "实体抽取失败：{error}",
     "toggleMaximize": "最大化/还原",
     "entityTypes": "实体类型",
     "showEdgeLabels": "显示关系标签",

@@ -17,11 +17,7 @@ from ..utils.llm_client import LLMClient
 logger = logging.getLogger(__name__)
 
 # 单次送入 LLM 的最大字符数。
-#
-# Reader navigation uses meaningful book sections/chapters, but extraction should stay
-# closer to the old small-section granularity. Full chapters cause the model to
-# summarize and skip incidental entities/relations.
-_MAX_CHARS_PER_CALL = 3000
+_MAX_CHARS_PER_CALL = 6000
 
 
 def detect_language(text: str) -> str:
@@ -248,7 +244,8 @@ class GraphExtractor:
             items.append(label)
         return "; ".join(items)
 
-    def _extract_from_chunk(self, chunk: str, language: str, episode_index: int) -> None:
+    def _extract_from_chunk(self, chunk: str, language: str, episode_index: int) -> Optional[str]:
+        """抽取单个文本片段。返回 None 表示成功，否则返回错误信息。"""
         system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(language=language)
         user_message = (
             f"Known entities (reuse these canonical names when they reappear):\n"
@@ -264,7 +261,7 @@ class GraphExtractor:
             result = self.llm_client.chat_json(messages=messages, temperature=0.2, max_tokens=4096)
         except Exception as e:
             logger.warning(f"章节 {episode_index} 抽取失败（已跳过该片段）: {e}")
-            return
+            return str(e)
 
         entities = result.get("entities") or []
         relations = result.get("relations") or []
@@ -300,6 +297,8 @@ class GraphExtractor:
                 episode_index=episode_index,
                 quote=rel.get("quote", ""),
             )
+
+        return None
 
     # ---------- 状态加载 / 导出 ----------
 
@@ -357,14 +356,36 @@ class GraphExtractor:
 
     # ---------- 对外主流程 ----------
 
-    def extract_episode(self, episode: Dict[str, Any], language: str) -> None:
-        """抽取单个章节，合并进当前状态。"""
+    def extract_episode(self, episode: Dict[str, Any], language: str) -> Dict[str, Any]:
+        """
+        抽取单个章节，合并进当前状态。
+
+        Returns:
+            {"total_chunks": int, "failed_chunks": int, "error": str|None}
+            当该章节所有片段均抽取失败时（如 LLM 持续报错），会记录一条 ERROR 级别
+            日志，便于日志监控（如 selfheal）捕获——否则该章节会被静默标记为
+            "已抽取" 但实际未产生任何实体/关系，前端会一直显示"继续阅读以展开图谱"。
+        """
         text = episode.get("text", "")
         if not text.strip():
-            return
+            return {"total_chunks": 0, "failed_chunks": 0, "error": None}
         episode_index = episode.get("index", 0)
-        for chunk in self._chunk_text(text):
-            self._extract_from_chunk(chunk, language, episode_index)
+        chunks = self._chunk_text(text)
+        last_error = None
+        failed = 0
+        for chunk in chunks:
+            err = self._extract_from_chunk(chunk, language, episode_index)
+            if err is not None:
+                failed += 1
+                last_error = err
+
+        if chunks and failed == len(chunks):
+            logger.error(
+                f"章节 {episode_index} 抽取完全失败（{failed}/{len(chunks)} 个分段均出错），"
+                f"本章节未提取到任何实体/关系: {last_error}"
+            )
+
+        return {"total_chunks": len(chunks), "failed_chunks": failed, "error": last_error}
 
     def build(
         self,

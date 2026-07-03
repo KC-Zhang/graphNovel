@@ -23,6 +23,11 @@ class RecordingLLM:
         }
 
 
+class FailingLLM:
+    def chat_json(self, messages, **kwargs):
+        raise RuntimeError("Access to model denied. Please make sure you are eligible for using the model.")
+
+
 def test_long_episode_is_extracted_in_small_section_sized_chunks():
     llm = RecordingLLM()
     extractor = GraphExtractor(llm_client=llm)
@@ -38,3 +43,20 @@ def test_long_episode_is_extracted_in_small_section_sized_chunks():
     assert len(llm.excerpts) >= 3
     assert all(len(excerpt) <= _MAX_CHARS_PER_CALL for excerpt in llm.excerpts)
     assert {m["episode"] for node in graph["nodes"] for m in node["mentions"]} == {4}
+
+
+def test_fully_failed_episode_reports_error_and_logs_it(caplog):
+    extractor = GraphExtractor(llm_client=FailingLLM())
+
+    with caplog.at_level("ERROR", logger="app.services.graph_extractor"):
+        result = extractor.extract_episode({"index": 7, "text": "Some chapter text."}, "English")
+
+    graph = extractor.to_graph()
+    assert result["total_chunks"] == 1
+    assert result["failed_chunks"] == 1
+    assert "Access to model denied" in result["error"]
+    assert graph["node_count"] == 0
+    assert any(
+        record.levelname == "ERROR" and "章节 7 抽取完全失败" in record.message
+        for record in caplog.records
+    )

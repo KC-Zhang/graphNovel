@@ -111,6 +111,7 @@ def reset_project(project_id: str):
     project.status = ProjectStatus.CREATED
     project.extract_task_id = None
     project.extracted_upto = -1
+    project.failed_episodes = []
     project.error = None
     ProjectManager.delete_graph(project_id)
     ExtractionManager().reset(project_id)
@@ -155,6 +156,7 @@ def repair_project(project_id: str):
     project.status = ProjectStatus.CREATED
     project.extract_task_id = None
     project.extracted_upto = -1
+    project.failed_episodes = []
     project.error = None
     ProjectManager.save_project(project)
 

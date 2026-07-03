@@ -181,7 +181,7 @@
           :extract-progress="extractProgress"
           :seen-edges="seenEdgesArr"
           :select-request="selectRequest"
-          @refresh="loadGraph"
+          @refresh="refreshGraph"
           @toggle-maximize="toggleGraphMaximized"
           @jump="onJump"
           @seen-edge="id => markEdgeSeen(id, true)"
@@ -642,10 +642,20 @@ const loadGraph = async () => {
   }
 }
 
+// 图谱"刷新"：重新拉取图谱，并再次触发抽取（借此重试之前失败的章节，
+// 例如在修复 LLM/接口故障后手动补齐缺失的章节）。
+const refreshGraph = async () => {
+  await loadGraph()
+  ensureAhead()
+}
+
 // ---------- 按需增量抽取 + 轮询 ----------
 let pollTimer = null
 let polling = false
 let lastLoadedUpto = -1
+// 上一次已知的失败章节签名：失败章节被重试成功后（extracted_upto 不变但图谱新增节点），
+// 据此触发图谱重新加载。
+let lastFailedKey = ''
 
 const pollStatus = async () => {
   try {
@@ -655,8 +665,12 @@ const pollStatus = async () => {
       extractedUpto.value = s.extracted_upto
       extractRunning.value = s.running
       extractError.value = s.error || ''
-      if (s.extracted_upto > lastLoadedUpto) {
-        lastLoadedUpto = s.extracted_upto
+      // 失败章节集合变化（多为重试成功）也意味着图谱数据有更新，需要重新拉取。
+      const failedKey = (s.failed_episodes || []).join(',')
+      const failedChanged = failedKey !== lastFailedKey
+      lastFailedKey = failedKey
+      if (s.extracted_upto > lastLoadedUpto || failedChanged) {
+        lastLoadedUpto = Math.max(lastLoadedUpto, s.extracted_upto)
         await loadGraph()
       }
       if (s.running || revealMax.value > s.extracted_upto) {

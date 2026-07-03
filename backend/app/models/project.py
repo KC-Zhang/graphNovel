@@ -42,6 +42,8 @@ class Project:
     # 图谱抽取信息
     extract_task_id: Optional[str] = None
     extracted_upto: int = -1  # 已抽取到的章节索引（-1 表示尚未抽取）
+    # 完全抽取失败（如 LLM 报错）的章节索引集合；供后续在故障恢复后自动重试。
+    failed_episodes: List[int] = field(default_factory=list)
     
     # 错误信息
     error: Optional[str] = None
@@ -60,6 +62,7 @@ class Project:
             "episode_count": len(self.episodes or []),
             "extract_task_id": self.extract_task_id,
             "extracted_upto": self.extracted_upto,
+            "failed_episodes": self.failed_episodes,
             "error": self.error
         }
         if include_episodes:
@@ -85,6 +88,7 @@ class Project:
             episodes=data.get('episodes', []),
             extract_task_id=data.get('extract_task_id'),
             extracted_upto=data.get('extracted_upto', -1),
+            failed_episodes=data.get('failed_episodes', []),
             error=data.get('error')
         )
 

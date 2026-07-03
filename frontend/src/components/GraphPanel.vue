@@ -44,6 +44,10 @@
           <span>{{ $t('graph.realtimeUpdating') }}</span>
           <span v-if="extractProgressText" class="graph-progress-text">{{ extractProgressText }}</span>
         </div>
+        <div v-else-if="extractErrorText" class="graph-building-hint graph-error-hint" :title="extractErrorText">
+          <span class="error-icon">⚠</span>
+          <span>{{ $t('graph.extractError', { error: extractErrorText }) }}</span>
+        </div>
 
         <!-- 详情面板 -->
         <div v-if="selectedItem" class="detail-panel">
@@ -148,6 +152,11 @@
       <div v-else-if="loading" class="graph-state">
         <div class="loading-spinner"></div>
         <p>{{ $t('graph.graphDataLoading') }}</p>
+      </div>
+
+      <div v-else-if="extractErrorText" class="graph-state">
+        <div class="empty-icon error-icon" :title="extractErrorText">⚠</div>
+        <p class="empty-text">{{ $t('graph.extractError', { error: extractErrorText }) }}</p>
       </div>
 
       <div v-else class="graph-state">
@@ -317,6 +326,7 @@ const extractProgressText = computed(() => {
   const target = Math.min(progress.target || progress.total, progress.total)
   return `${extracted}/${progress.total} · ${target}`
 })
+const extractErrorText = computed(() => props.extractProgress?.error || '')
 
 const nodeById = computed(() => {
   const m = {}
@@ -950,6 +960,7 @@ onUnmounted(() => {
   text-align: center; color: #999;
 }
 .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.2; }
+.empty-icon.error-icon { opacity: 0.6; color: #E53935; }
 
 .graph-legend {
   position: absolute; bottom: 24px; left: 24px;
@@ -1110,6 +1121,13 @@ input:checked + .slider:before { transform: translateX(18px); }
   font-family: monospace; font-size: 12px; opacity: 0.85;
   padding-left: 8px; border-left: 1px solid rgba(255,255,255,0.3);
 }
+.graph-error-hint {
+  background: rgba(178, 34, 52, 0.85); max-width: 80%;
+}
+.graph-error-hint span:not(.error-icon) {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.graph-error-hint .error-icon { flex-shrink: 0; }
 .memory-icon-wrapper { display: flex; align-items: center; animation: breathe 2s ease-in-out infinite; }
 .memory-icon { width: 18px; height: 18px; color: #4CAF50; }
 @keyframes breathe {
