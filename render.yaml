@@ -24,6 +24,8 @@ services:
         value: /var/data/uploads
       - key: SECRET_KEY
         generateValue: true
+      - key: CORS_ORIGINS
+        value: https://bookmiro-frontend.onrender.com
       - key: LLM_API_KEY
         sync: false
       - key: LLM_BASE_URL

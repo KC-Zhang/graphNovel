@@ -46,9 +46,9 @@ class Project:
     # 错误信息
     error: Optional[str] = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, include_episodes: bool = True) -> Dict[str, Any]:
         """转换为字典"""
-        return {
+        data = {
             "project_id": self.project_id,
             "name": self.name,
             "status": self.status.value if isinstance(self.status, ProjectStatus) else self.status,
@@ -57,11 +57,14 @@ class Project:
             "files": self.files,
             "total_text_length": self.total_text_length,
             "language": self.language,
-            "episodes": self.episodes,
+            "episode_count": len(self.episodes or []),
             "extract_task_id": self.extract_task_id,
             "extracted_upto": self.extracted_upto,
             "error": self.error
         }
+        if include_episodes:
+            data["episodes"] = self.episodes
+        return data
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Project':
@@ -318,6 +321,13 @@ class ProjectManager:
             return None
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
+
+    @classmethod
+    def delete_graph(cls, project_id: str) -> None:
+        """删除已保存的图谱数据（如果存在）"""
+        path = cls._get_graph_path(project_id)
+        if os.path.exists(path):
+            os.remove(path)
     
     @classmethod
     def get_project_files(cls, project_id: str) -> List[str]:
@@ -332,4 +342,3 @@ class ProjectManager:
             for f in os.listdir(files_dir) 
             if os.path.isfile(os.path.join(files_dir, f))
         ]
-

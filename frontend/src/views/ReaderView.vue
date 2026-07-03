@@ -40,20 +40,44 @@
 
     <!-- 启动/上传状态 -->
     <div v-if="phase !== 'ready'" class="status-screen">
-      <div class="status-card">
-        <div v-if="phase !== 'error'" class="loading-spinner"></div>
-        <div class="status-message">{{ statusMessage }}</div>
-        <div v-if="phase === 'error'" class="error-box">
-          <div class="error-text">{{ errorText }}</div>
-          <button class="retry-btn" @click="retry">{{ $t('reader.retry') }}</button>
-        </div>
+      <div class="status-card" :class="{ wide: phase === 'review' }">
+        <template v-if="phase === 'review'">
+          <div class="review-head">
+            <div class="review-title">{{ $t('reader.reviewChapters') }}</div>
+            <div class="review-desc">{{ $t('reader.reviewChaptersDesc', { count: episodes.length }) }}</div>
+          </div>
+          <div class="chapter-preview-list">
+            <div v-for="ep in chapterPreviewItems" :key="ep.index" class="chapter-preview-item">
+              <span class="chapter-preview-index">{{ ep.index + 1 }}</span>
+              <span class="chapter-preview-title">{{ ep.title }}</span>
+              <span class="chapter-preview-count">{{ ep.char_count }}</span>
+            </div>
+            <div v-if="episodes.length > chapterPreviewItems.length" class="chapter-preview-more">
+              {{ $t('reader.episodePreviewMore', { count: episodes.length - chapterPreviewItems.length }) }}
+            </div>
+          </div>
+          <div class="review-actions">
+            <button class="retry-btn secondary" @click="goHome">{{ $t('reader.chooseFiles') }}</button>
+            <button class="retry-btn" @click="confirmChapterReview">{{ $t('reader.continueToReader') }}</button>
+          </div>
+        </template>
+        <template v-else>
+          <div v-if="phase !== 'error' && phase !== 'expired'" class="loading-spinner"></div>
+          <div class="status-message">{{ statusMessage }}</div>
+          <div v-if="phase === 'error' || phase === 'expired'" class="error-box">
+            <div class="error-text">{{ errorText }}</div>
+            <button class="retry-btn" @click="phase === 'expired' ? goHome() : retry()">
+              {{ phase === 'expired' ? $t('reader.chooseFiles') : $t('reader.retry') }}
+            </button>
+          </div>
+        </template>
       </div>
     </div>
 
     <!-- 阅读主界面 -->
-    <div v-else class="reader-body" ref="readerBody">
+    <div v-else class="reader-body" :class="{ 'graph-maximized': graphMaximized }" ref="readerBody">
       <!-- 左：书籍面板 -->
-      <div class="book-pane" ref="bookPane" :style="{ width: splitPct + '%' }">
+      <div v-show="!graphMaximized" class="book-pane" ref="bookPane" :style="{ width: splitPct + '%' }">
         <div class="episode-head">
           <div class="episode-title">{{ currentEpisodeTitle }}</div>
           <div class="episode-head-right">
@@ -113,7 +137,7 @@
       </div>
 
       <!-- 拖拽调整左右比例 -->
-      <div class="pane-resizer" @mousedown="startResize"></div>
+      <div v-show="!graphMaximized" class="pane-resizer" @mousedown="startResize"></div>
 
       <!-- 右：图谱面板 -->
       <div class="graph-pane">
@@ -123,9 +147,11 @@
           :view-episode="viewEpisode"
           :episodes="episodes"
           :loading="graphLoading"
+          :extract-progress="extractProgress"
           :seen-edges="seenEdgesArr"
           :select-request="selectRequest"
           @refresh="loadGraph"
+          @toggle-maximize="toggleGraphMaximized"
           @jump="onJump"
           @seen-edge="id => markEdgeSeen(id, true)"
           @set-edge-seen="({ id, value }) => markEdgeSeen(id, value)"
@@ -146,6 +172,7 @@ import {
 } from '../api/book'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
+import { createMentionIndex, findQuoteRange, shouldMarkLinkRead } from '../utils/readerLinks'
 
 const PREFETCH = 2
 
@@ -162,6 +189,7 @@ const {
 const seenEdgesArr = computed(() => [...seenEdges.value])
 const readCount = computed(() => readEpisodes.value.size)
 const showChapters = ref(false)
+const graphMaximized = ref(false)
 
 // 左右分栏比例（书籍面板宽度百分比），可拖拽调整并持久化
 const SPLIT_KEY = 'bookmiro:splitPct'
@@ -214,7 +242,7 @@ const linkSeen = (link) => link.type === 'node'
   ? nodeSeen(link.id)
   : seenEdges.value.has(link.id)
 
-const phase = ref('loading') // loading | uploading | ready | error
+const phase = ref('loading') // loading | uploading | review | ready | expired | error
 const statusMessage = ref('')
 const errorText = ref('')
 
@@ -232,92 +260,46 @@ const highlightQuote = ref('')
 // 增量抽取状态
 const extractedUpto = ref(-1)
 const extractRunning = ref(false)
+const extractError = ref('')
 // 正在读的章节图谱还没抽到时，显示"构建中"
 const graphLoading = computed(() => revealMax.value > extractedUpto.value)
+const extractProgress = computed(() => {
+  const total = episodes.value.length
+  return {
+    extracted: Math.max(0, extractedUpto.value + 1),
+    target: total ? Math.min(total, viewEpisode.value + PREFETCH + 1) : 0,
+    total,
+    running: extractRunning.value,
+    error: extractError.value,
+  }
+})
 
 const currentEpisodeTitle = computed(() => {
   const ep = episodes.value[viewEpisode.value]
   return ep ? ep.title : ''
 })
 
-// 构建规范化文本并保留到原文位置的映射。
-// stripPunct=true 时进一步忽略标点，仅保留字母/数字/文字，用于更宽松的匹配。
-const buildNormalized = (text, stripPunct = false) => {
-  let norm = ''
-  const map = []
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (/\s/.test(ch)) continue
-    if (stripPunct && !/[\p{L}\p{N}]/u.test(ch)) continue
-    norm += ch
-    map.push(i)
-  }
-  return { norm, map }
-}
-
-// 清理引用：去掉首尾引号/括号/省略号，便于匹配
-const cleanQuote = (q) => {
-  return (q || '')
-    .trim()
-    .replace(/^[\s"'“”‘’「」『』（(\[【]+/, '')
-    .replace(/[\s"'“”‘’「」『』）)\]】]+$/, '')
-    .replace(/^(?:\.{3,}|…+)/, '')
-    .replace(/(?:\.{3,}|…+)$/, '')
-    .trim()
-}
-
-// 在原文中定位引用，返回 {start, end}
-// 依次尝试：忽略空白 -> 忽略空白+标点；每次先整体匹配，再用前缀兜底。
-const findQuoteRange = (text, quote) => {
-  const q = cleanQuote(quote)
-  if (!text || !q) return null
-
-  for (const stripPunct of [false, true]) {
-    const { norm, map } = buildNormalized(text, stripPunct)
-    const nq = buildNormalized(q, stripPunct).norm
-    if (!nq) continue
-
-    let idx = norm.indexOf(nq)
-    if (idx !== -1) {
-      return { start: map[idx], end: map[idx + nq.length - 1] + 1 }
-    }
-
-    // 兜底：匹配引用前缀（应对 LLM 引用非完全逐字的情况）
-    const probeMax = Math.min(nq.length, 16)
-    for (let len = probeMax; len >= 6; len -= 2) {
-      const probe = nq.slice(0, len)
-      idx = norm.indexOf(probe)
-      if (idx !== -1) {
-        return { start: map[idx], end: map[idx + len - 1] + 1 }
-      }
-    }
-  }
-  return null
-}
+const chapterPreviewItems = computed(() => episodes.value.slice(0, 30))
 
 const highlightRange = computed(() => {
   if (!highlightQuote.value) return null
   return findQuoteRange(currentText.value || '', highlightQuote.value)
 })
 
+const graphMentionIndex = computed(() => createMentionIndex(graphData.value, revealMax.value))
+
 // 反向链接：本章正文中与（已揭示的）节点/关系相关联的片段
 const episodeLinks = computed(() => {
   const text = currentText.value || ''
   if (!text) return []
   const ep = viewEpisode.value
-  const maxReveal = revealMax.value
-  const g = graphData.value || {}
   const links = []
-  const pushMentions = (item, type, name) => {
-    if ((item.first_episode ?? 0) > maxReveal) return
-    for (const m of (item.mentions || [])) {
-      if (m.episode !== ep) continue
-      const r = findQuoteRange(text, m.quote)
-      if (r) links.push({ start: r.start, end: r.end, type, id: item.id, name })
+  for (const item of graphMentionIndex.value.get(ep) || []) {
+    const range = findQuoteRange(text, item.quote)
+    if (range) {
+      links.push({ start: range.start, end: range.end, type: item.type, id: item.id, name: item.name })
     }
   }
-  ;(g.nodes || []).forEach(n => pushMentions(n, 'node', n.name || ''))
-  ;(g.edges || []).forEach(e => pushMentions(e, 'edge', e.label || ''))
   // 重叠时优先节点
   links.sort((a, b) => a.start - b.start || (a.type === b.type ? 0 : (a.type === 'node' ? -1 : 1)))
   return links
@@ -394,6 +376,21 @@ const scrollToHighlight = () => {
 
 const goHome = () => router.push({ name: 'Home' })
 
+const toggleGraphMaximized = () => {
+  graphMaximized.value = !graphMaximized.value
+  nextTick(() => window.dispatchEvent(new Event('resize')))
+}
+
+const confirmChapterReview = async () => {
+  if (!episodes.value.length) {
+    errorText.value = t('reader.noEpisodes')
+    phase.value = 'error'
+    return
+  }
+  phase.value = 'ready'
+  await setViewEpisode(0)
+}
+
 // ---------- 章节文本加载 ----------
 const loadEpisodeText = async (idx) => {
   if (episodeTextCache.has(idx)) {
@@ -457,7 +454,9 @@ const markScrolledPastEdges = (el) => {
   el.querySelectorAll('.text-link.link-edge').forEach(node => {
     const id = node.getAttribute('data-edge-id')
     if (!id || seenEdges.value.has(id)) return
-    if (node.getBoundingClientRect().bottom <= top + 4) markEdgeSeen(id, true)
+    if (shouldMarkLinkRead({ linkBottom: node.getBoundingClientRect().bottom, viewportTop: top })) {
+      markEdgeSeen(id, true)
+    }
   })
 }
 
@@ -523,6 +522,7 @@ const pollStatus = async () => {
       const s = res.data
       extractedUpto.value = s.extracted_upto
       extractRunning.value = s.running
+      extractError.value = s.error || ''
       if (s.extracted_upto > lastLoadedUpto) {
         lastLoadedUpto = s.extracted_upto
         await loadGraph()
@@ -554,6 +554,7 @@ const ensureAhead = async () => {
     if (res.success) {
       extractedUpto.value = res.data.extracted_upto
       extractRunning.value = res.data.running
+      extractError.value = res.data.error || ''
     }
   } catch (e) {
     // ignore transient errors
@@ -579,6 +580,11 @@ const initExisting = async () => {
       return
     }
     applyBookMeta(res.data)
+    if (!episodes.value.length) {
+      errorText.value = t('reader.noEpisodes')
+      phase.value = 'error'
+      return
+    }
     loadProgress(projectId.value)  // 恢复已读进度与阅读位置
     extractedUpto.value = typeof res.data.extracted_upto === 'number' ? res.data.extracted_upto : -1
     lastLoadedUpto = extractedUpto.value
@@ -598,8 +604,9 @@ const initExisting = async () => {
 const initNew = async () => {
   const pending = getPendingUpload()
   if (!pending.isPending || !pending.files.length) {
-    // 没有待上传数据，回首页
-    goHome()
+    statusMessage.value = t('reader.uploadExpired')
+    errorText.value = t('reader.uploadExpired')
+    phase.value = 'expired'
     return
   }
   phase.value = 'uploading'
@@ -618,14 +625,18 @@ const initNew = async () => {
     clearPendingUpload()
     projectId.value = res.data.project_id
     applyBookMeta(res.data)
+    if (!episodes.value.length) {
+      errorText.value = t('reader.noEpisodes')
+      phase.value = 'error'
+      return
+    }
     loadProgress(projectId.value)  // 新书：初始化空进度并绑定 projectId
     extractedUpto.value = -1
     lastLoadedUpto = -1
     // 更新 URL 以便刷新/分享
     router.replace({ name: 'Reader', params: { projectId: projectId.value } })
-    // 立即进入阅读；图谱按需在后台构建
-    phase.value = 'ready'
-    if (episodes.value.length) await setViewEpisode(0)
+    phase.value = 'review'
+    statusMessage.value = t('reader.reviewChapters')
   } catch (e) {
     errorText.value = e.message || 'Upload failed'
     phase.value = 'error'
@@ -715,6 +726,7 @@ onUnmounted(() => {
   padding: 40px; border: 1px solid #eee; border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0,0,0,0.05);
 }
+.status-card.wide { width: 720px; text-align: left; }
 .loading-spinner {
   width: 44px; height: 44px; border: 3px solid #eee; border-top-color: #FF4500;
   border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px;
@@ -731,9 +743,42 @@ onUnmounted(() => {
   border-radius: 6px; cursor: pointer; font-weight: 600;
 }
 .retry-btn:hover { background: #FF4500; }
+.retry-btn.secondary { background: #fff; color: #333; border: 1px solid #ddd; }
+.retry-btn.secondary:hover { border-color: #FF4500; color: #FF4500; }
+
+.review-head { margin-bottom: 18px; }
+.review-title { font-size: 20px; font-weight: 700; color: #111; margin-bottom: 6px; }
+.review-desc { font-size: 13px; color: #666; line-height: 1.6; }
+.chapter-preview-list {
+  max-height: 360px; overflow-y: auto; border: 1px solid #eee;
+  border-radius: 8px; background: #fafafa;
+}
+.chapter-preview-item {
+  display: grid; grid-template-columns: 44px 1fr 72px; align-items: center;
+  gap: 12px; padding: 10px 12px; border-bottom: 1px solid #eee;
+}
+.chapter-preview-item:last-child { border-bottom: none; }
+.chapter-preview-index {
+  font-family: monospace; font-size: 12px; color: #FF4500; font-weight: 700;
+}
+.chapter-preview-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px; color: #222; font-weight: 600;
+}
+.chapter-preview-count {
+  justify-self: end; font-family: monospace; font-size: 11px; color: #999;
+}
+.chapter-preview-more {
+  padding: 12px; text-align: center; font-size: 12px; color: #777;
+  background: #fff;
+}
+.review-actions {
+  display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;
+}
 
 /* 阅读主体 */
 .reader-body { flex: 1; display: flex; min-height: 0; }
+.reader-body.graph-maximized .graph-pane { flex: 1 1 100%; }
 .book-pane {
   width: 46%; min-width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
   min-height: 0;

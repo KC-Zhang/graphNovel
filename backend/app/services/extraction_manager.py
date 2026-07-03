@@ -168,3 +168,8 @@ class ExtractionManager:
     def status(self, project_id: str, total: int) -> Dict[str, Any]:
         with self._lock:
             return self._status_locked(project_id, total)
+
+    def reset(self, project_id: str) -> None:
+        """清除内存中的抽取状态，使下一次 ensure 从持久化状态重新开始。"""
+        with self._lock:
+            self._states.pop(project_id, None)

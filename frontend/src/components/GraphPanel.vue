@@ -41,7 +41,8 @@
               <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-4.04z" />
             </svg>
           </div>
-          {{ $t('graph.realtimeUpdating') }}
+          <span>{{ $t('graph.realtimeUpdating') }}</span>
+          <span v-if="extractProgressText" class="graph-progress-text">{{ extractProgressText }}</span>
         </div>
 
         <!-- 详情面板 -->
@@ -181,10 +182,21 @@
 
     <div v-if="hasGraph" class="edge-labels-toggle">
       <label class="toggle-switch">
-        <input type="checkbox" v-model="showEdgeLabels" />
+        <input type="checkbox" v-model="showEdgeLabels" @change="onEdgeLabelToggle" />
         <span class="slider"></span>
       </label>
       <span class="toggle-label">{{ $t('graph.showEdgeLabels') }}</span>
+      <span
+        v-if="densityHint"
+        class="label-help"
+        tabindex="0"
+        :aria-label="$t('graph.denseGraphHint', { size: densityMessage })"
+      >
+        ?
+        <span class="label-help-tooltip">
+          {{ $t('graph.denseGraphHint', { size: densityMessage }) }}
+        </span>
+      </span>
     </div>
   </div>
 </template>
@@ -192,6 +204,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import * as d3 from 'd3'
+import { graphDensityMessage, shouldAutoHideEdgeLabels } from '../utils/graphPerformance'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
@@ -199,6 +212,7 @@ const props = defineProps({
   viewEpisode: Number,      // 当前正在阅读的章节（本章视图）
   episodes: Array,          // 章节元数据（用于标题）
   loading: Boolean,
+  extractProgress: { type: Object, default: null },
   seenEdges: { type: Array, default: () => [] },  // 已查看关系 id（节点已读由此派生）
   selectRequest: { type: Object, default: null }  // 外部请求选中 { type, id, nonce }
 })
@@ -214,6 +228,7 @@ const reelList = ref(null)
 const detailContent = ref(null)
 const selectedItem = ref(null)
 const showEdgeLabels = ref(true)
+const edgeLabelsUserOverrode = ref(false)
 const activeReelIndex = ref(0)
 const autoplay = ref(false)
 const focusUnread = ref(false)
@@ -288,6 +303,20 @@ const nodeSeenSet = computed(() => {
 })
 
 const hasGraph = computed(() => visibleNodes.value.length > 0)
+const densityMessage = computed(() => graphDensityMessage({
+  nodeCount: visibleNodes.value.length,
+  edgeCount: visibleEdges.value.length,
+}))
+const densityHint = computed(() =>
+  hasGraph.value && !showEdgeLabels.value && visibleEdges.value.length > 180
+)
+const extractProgressText = computed(() => {
+  const progress = props.extractProgress
+  if (!progress?.total) return ''
+  const extracted = Math.min(progress.extracted || 0, progress.total)
+  const target = Math.min(progress.target || progress.total, progress.total)
+  return `${extracted}/${progress.total} · ${target}`
+})
 
 const nodeById = computed(() => {
   const m = {}
@@ -309,6 +338,10 @@ const entityTypes = computed(() => {
 const colorForType = (type) => {
   const t = entityTypes.value.find(e => e.name === (type || '—'))
   return t ? t.color : '#999'
+}
+
+const onEdgeLabelToggle = () => {
+  edgeLabelsUserOverrode.value = true
 }
 
 // 当前可见范围内的未读数量
@@ -712,18 +745,20 @@ const renderGraph = () => {
 
   simulation.on('tick', () => {
     linkSel.attr('d', getLinkPath)
-    linkLabelSel.each(function (d) {
-      const mid = getMid(d)
-      d3.select(this).attr('x', mid.x).attr('y', mid.y)
-    })
-    linkLabelBgSel.each(function (d, i) {
-      const mid = getMid(d)
-      const textEl = linkLabelSel.nodes()[i]
-      const bbox = textEl.getBBox()
-      d3.select(this)
-        .attr('x', mid.x - bbox.width / 2 - 4).attr('y', mid.y - bbox.height / 2 - 2)
-        .attr('width', bbox.width + 8).attr('height', bbox.height + 4)
-    })
+    if (showEdgeLabels.value) {
+      linkLabelSel.each(function (d) {
+        const mid = getMid(d)
+        d3.select(this).attr('x', mid.x).attr('y', mid.y)
+      })
+      linkLabelBgSel.each(function (d, i) {
+        const mid = getMid(d)
+        const textEl = linkLabelSel.nodes()[i]
+        const bbox = textEl.getBBox()
+        d3.select(this)
+          .attr('x', mid.x - bbox.width / 2 - 4).attr('y', mid.y - bbox.height / 2 - 2)
+          .attr('width', bbox.width + 8).attr('height', bbox.height + 4)
+      })
+    }
     nodeSel.attr('cx', d => d.x).attr('cy', d => d.y)
     nodeLabels.attr('x', d => d.x).attr('y', d => d.y)
     nodes.forEach(n => positionCache.set(n.id, { x: n.x, y: n.y }))
@@ -841,6 +876,12 @@ watch(showEdgeLabels, (v) => {
   if (linkLabelSel) linkLabelSel.style('display', v ? 'block' : 'none')
   if (linkLabelBgSel) linkLabelBgSel.style('display', v ? 'block' : 'none')
 })
+
+watch(() => visibleEdges.value.length, (edgeCount) => {
+  if (shouldAutoHideEdgeLabels({ edgeCount, userOverrode: edgeLabelsUserOverrode.value })) {
+    showEdgeLabels.value = false
+  }
+}, { immediate: true })
 
 // 已读状态 / 专注未读 / 选中项变化时，仅更新样式，避免整图重排
 watch([() => props.seenEdges, focusUnread, () => selectedItem.value], () => {
@@ -960,6 +1001,29 @@ onUnmounted(() => {
 input:checked + .slider { background-color: #7B2D8E; }
 input:checked + .slider:before { transform: translateX(18px); }
 .toggle-label { font-size: 12px; color: #666; }
+.label-help {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%; border: 1px solid #D0D0D0;
+  color: #777; font-size: 12px; font-weight: 700; cursor: help; user-select: none;
+}
+.label-help:hover, .label-help:focus-visible {
+  border-color: #7B2D8E; color: #7B2D8E; outline: none;
+}
+.label-help-tooltip {
+  position: absolute; top: calc(100% + 8px); right: 0; width: 240px;
+  background: rgba(0,0,0,0.82); color: #FFF; border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; line-height: 1.5; font-weight: 500;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.16); opacity: 0; pointer-events: none;
+  transform: translateY(-4px); transition: opacity 0.15s, transform 0.15s; z-index: 30;
+}
+.label-help-tooltip::before {
+  content: ""; position: absolute; top: -5px; right: 6px; width: 10px; height: 10px;
+  background: rgba(0,0,0,0.82); transform: rotate(45deg);
+}
+.label-help:hover .label-help-tooltip,
+.label-help:focus-visible .label-help-tooltip {
+  opacity: 1; transform: translateY(0);
+}
 
 /* 详情面板 */
 .detail-panel {
@@ -1041,6 +1105,10 @@ input:checked + .slider:before { transform: translateX(18px); }
   background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px); color: #fff;
   padding: 10px 20px; border-radius: 30px; font-size: 13px;
   display: flex; align-items: center; gap: 10px; z-index: 100; font-weight: 500;
+}
+.graph-progress-text {
+  font-family: monospace; font-size: 12px; opacity: 0.85;
+  padding-left: 8px; border-left: 1px solid rgba(255,255,255,0.3);
 }
 .memory-icon-wrapper { display: flex; align-items: center; animation: breathe 2s ease-in-out infinite; }
 .memory-icon { width: 18px; height: 18px; color: #4CAF50; }

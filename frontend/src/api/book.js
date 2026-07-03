@@ -105,3 +105,27 @@ export function deleteBook(projectId) {
     method: 'delete'
   })
 }
+
+/**
+ * 重置书籍图谱抽取状态
+ * @param {String} projectId
+ * @returns {Promise}
+ */
+export function resetBook(projectId) {
+  return service({
+    url: `/api/graph/project/${projectId}/reset`,
+    method: 'post'
+  })
+}
+
+/**
+ * 从已提取文本重建章节元数据，并清空旧图谱
+ * @param {String} projectId
+ * @returns {Promise}
+ */
+export function repairBook(projectId) {
+  return service({
+    url: `/api/graph/project/${projectId}/repair`,
+    method: 'post'
+  })
+}

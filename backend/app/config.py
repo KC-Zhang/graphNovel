@@ -37,6 +37,13 @@ class Config:
     # 上传目录：生产环境可通过 UPLOAD_FOLDER 指向持久化磁盘，未设置时回退到本地默认路径
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or os.path.join(os.path.dirname(__file__), '../uploads')
     ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
+
+    # CORS 配置：开发默认允许本地 Vite；生产环境通过 CORS_ORIGINS 显式配置。
+    _DEFAULT_CORS = (
+        'http://localhost:3000,http://127.0.0.1:3000,'
+        'http://localhost:3001,http://127.0.0.1:3001'
+    )
+    CORS_ORIGINS = os.environ.get('CORS_ORIGINS') or (_DEFAULT_CORS if DEBUG else '*')
     
     @classmethod
     def validate(cls) -> list[str]:
@@ -45,4 +52,3 @@ class Config:
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
         return errors
-

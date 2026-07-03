@@ -40,7 +40,9 @@ def create_app(config_class=Config):
         logger.info("=" * 50)
     
     # 启用CORS
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    raw_origins = app.config.get('CORS_ORIGINS', '*')
+    origins = '*' if raw_origins == '*' else [o.strip() for o in raw_origins.split(',') if o.strip()]
+    CORS(app, resources={r"/api/*": {"origins": origins}})
     
     # 请求日志中间件
     @app.before_request
@@ -69,4 +71,3 @@ def create_app(config_class=Config):
         logger.info("BookMiro Backend 启动完成")
     
     return app
-

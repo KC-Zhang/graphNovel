@@ -53,7 +53,7 @@
         </div>
 
         <h3 class="card-title">{{ book.name || $t('reader.untitled') }}</h3>
-        <p class="card-desc">{{ $t('library.episodeCount', { count: (book.episodes && book.episodes.length) || 0 }) }}</p>
+        <p class="card-desc">{{ $t('library.episodeCount', { count: episodeCount(book) }) }}</p>
 
         <div class="card-footer">
           <div class="card-datetime">
@@ -63,6 +63,32 @@
           <span class="card-progress" :class="progressClass(book.status)">
             <span class="status-dot">●</span> {{ statusLabel(book.status) }}
           </span>
+        </div>
+
+        <div class="card-actions">
+          <button
+            v-if="needsRepair(book)"
+            class="card-action primary"
+            :disabled="busyBookId === book.project_id"
+            @click.stop="repairProject(book)"
+          >
+            {{ $t('history.repairBook') }}
+          </button>
+          <button
+            v-else
+            class="card-action"
+            :disabled="busyBookId === book.project_id"
+            @click.stop="resetProject(book)"
+          >
+            {{ $t('history.reprocessBook') }}
+          </button>
+          <button
+            class="card-action danger"
+            :disabled="busyBookId === book.project_id"
+            @click.stop="deleteProject(book)"
+          >
+            {{ $t('history.deleteBook') }}
+          </button>
         </div>
 
         <div class="card-bottom-line"></div>
@@ -80,7 +106,7 @@
 import { ref, computed, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { listBooks } from '../api/book'
+import { deleteBook, listBooks, repairBook, resetBook } from '../api/book'
 
 const router = useRouter()
 const route = useRoute()
@@ -88,6 +114,7 @@ const { t } = useI18n()
 
 const books = ref([])
 const loading = ref(true)
+const busyBookId = ref('')
 const isExpanded = ref(false)
 const hoveringCard = ref(null)
 const historyContainer = ref(null)
@@ -98,7 +125,7 @@ let pendingState = null
 
 const CARDS_PER_ROW = 4
 const CARD_WIDTH = 280
-const CARD_HEIGHT = 280
+const CARD_HEIGHT = 320
 const CARD_GAP = 24
 
 const containerStyle = computed(() => {
@@ -182,8 +209,55 @@ const truncateFilename = (filename, maxLength) => {
   return nameWithoutExt.slice(0, maxLength - ext.length - 3) + '...' + ext
 }
 
+const episodeCount = (book) => {
+  if (typeof book.episode_count === 'number') return book.episode_count
+  return (book.episodes && book.episodes.length) || 0
+}
+
+const needsRepair = (book) => episodeCount(book) === 0
+
 const openBook = (book) => {
+  if (needsRepair(book)) return
   router.push({ name: 'Reader', params: { projectId: book.project_id } })
+}
+
+const clearProgress = (projectId) => {
+  try { localStorage.removeItem(`bookmiro:progress:${projectId}`) } catch (e) { /* ignore */ }
+}
+
+const deleteProject = async (book) => {
+  const name = book.name || t('reader.untitled')
+  if (!window.confirm(t('history.confirmDelete', { name }))) return
+  busyBookId.value = book.project_id
+  try {
+    await deleteBook(book.project_id)
+    clearProgress(book.project_id)
+    await loadBooks()
+  } finally {
+    busyBookId.value = ''
+  }
+}
+
+const resetProject = async (book) => {
+  busyBookId.value = book.project_id
+  try {
+    await resetBook(book.project_id)
+    clearProgress(book.project_id)
+    router.push({ name: 'Reader', params: { projectId: book.project_id } })
+  } finally {
+    busyBookId.value = ''
+  }
+}
+
+const repairProject = async (book) => {
+  busyBookId.value = book.project_id
+  try {
+    await repairBook(book.project_id)
+    clearProgress(book.project_id)
+    await loadBooks()
+  } finally {
+    busyBookId.value = ''
+  }
 }
 
 const loadBooks = async () => {
@@ -284,6 +358,17 @@ onUnmounted(() => {
 .card-footer { position: relative; display: flex; justify-content: space-between; align-items: center; padding-top: 12px; border-top: 1px solid #F3F4F6; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: #9CA3AF; font-weight: 500; }
 .card-datetime { display: flex; align-items: center; gap: 8px; }
 .card-progress { display: flex; align-items: center; gap: 6px; letter-spacing: 0.5px; font-weight: 600; font-size: 0.65rem; }
+.card-actions { display: flex; gap: 6px; margin-top: 10px; }
+.card-action {
+  flex: 1; height: 26px; border: 1px solid #E5E7EB; background: #FFF;
+  color: #4B5563; border-radius: 4px; cursor: pointer;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; font-weight: 600;
+}
+.card-action:hover:not(:disabled) { border-color: #111; color: #111; }
+.card-action.primary { background: #111; color: #FFF; border-color: #111; }
+.card-action.primary:hover:not(:disabled) { background: #FF4500; border-color: #FF4500; }
+.card-action.danger:hover:not(:disabled) { border-color: #C5283D; color: #C5283D; }
+.card-action:disabled { opacity: 0.5; cursor: wait; }
 .status-dot { font-size: 0.5rem; }
 .card-progress.completed { color: #10B981; }
 .card-progress.in-progress { color: #F59E0B; }

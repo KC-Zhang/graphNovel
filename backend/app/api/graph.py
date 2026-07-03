@@ -75,7 +75,7 @@ def list_projects():
 
     return jsonify({
         "success": True,
-        "data": [p.to_dict() for p in projects],
+        "data": [p.to_dict(include_episodes=False) for p in projects],
         "count": len(projects)
     })
 
@@ -112,12 +112,56 @@ def reset_project(project_id: str):
     project.extract_task_id = None
     project.extracted_upto = -1
     project.error = None
+    ProjectManager.delete_graph(project_id)
+    ExtractionManager().reset(project_id)
     ProjectManager.save_project(project)
 
     return jsonify({
         "success": True,
         "message": t('api.projectReset', id=project_id),
         "data": project.to_dict()
+    })
+
+
+@graph_bp.route('/project/<project_id>/repair', methods=['POST'])
+def repair_project(project_id: str):
+    """从已保存的提取文本重建章节元数据，并清空旧图谱以便重新抽取。"""
+    project = ProjectManager.get_project(project_id)
+
+    if not project:
+        return jsonify({
+            "success": False,
+            "error": t('api.projectNotFound', id=project_id)
+        }), 404
+
+    text = ProjectManager.get_extracted_text(project_id)
+    if not text:
+        return jsonify({
+            "success": False,
+            "error": t('api.textNotFound')
+        }), 404
+
+    episodes = segment_book(text)
+    if not episodes:
+        return jsonify({
+            "success": False,
+            "error": t('api.noDocProcessed')
+        }), 400
+
+    ProjectManager.save_episodes(project_id, episodes)
+    ProjectManager.delete_graph(project_id)
+    ExtractionManager().reset(project_id)
+    project.episodes = _episode_meta(episodes)
+    project.status = ProjectStatus.CREATED
+    project.extract_task_id = None
+    project.extracted_upto = -1
+    project.error = None
+    ProjectManager.save_project(project)
+
+    return jsonify({
+        "success": True,
+        "message": t('api.projectRepaired', id=project_id),
+        "data": project.to_dict(include_episodes=False)
     })
 
 
