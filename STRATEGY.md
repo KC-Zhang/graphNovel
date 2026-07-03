@@ -4,6 +4,22 @@ This document captures how BookMiro is structured as an open-source project with
 
 > Legal note: the sections on payments, copyright, and DMCA below are a product/engineering plan, not legal advice. Have a lawyer review Terms of Service, Privacy Policy, and the DMCA process before launch.
 
+## 0. Guiding principle: self-hosting always gets full functionality
+
+The open-source repo is not a stripped-down trial of a hosted product - it **is** the product. Every reading/graph feature (reading-synced reveal, language-locked extraction, jump-to-source, edge reel, read-tracking, reverse linking) runs identically whether you use it on `localhost`, self-host it on your own server, or (eventually) use the hosted version. Nothing is gated behind a subscription.
+
+| | Self-hosted (this repo, today) | Hosted SaaS (future, [section 2](#2-hosted-product-model-pay-once-then-free-for-everyone)+) |
+|---|---|---|
+| Reading/graph features | All of them | Same (identical app code) |
+| Who provides the LLM key | You | The hosted service |
+| Where books/graphs live | Local files on your machine/server | Shared Postgres + object storage |
+| Users | Just you (single-tenant) | Accounts, multi-tenant |
+| Cost | Your own LLM usage only | Pay-once-per-book unlock |
+| Shared public library | No - your books are yours | Yes - unlocked books become free for everyone |
+| Rights acknowledgment / DMCA takedown | Not applicable (private use) | Required (section 3) |
+
+Concretely: everything under [section 4](#4-architecture-changes-needed-for-hosting) below (accounts, billing, shared catalog DB, admin/DMCA) is **additive infrastructure for running BookMiro as a shared paid service** - not a list of features missing from self-hosting. See **[SELF_HOSTING.md](./SELF_HOSTING.md)** for deployment instructions (local, Docker, Render, or any other host) and the full environment variable reference.
+
 ## 1. Repository structure (open-core)
 
 Two repositories under the same GitHub org:
@@ -63,6 +79,8 @@ Any uploaded book can become public, but the uploader must take responsibility f
 - **Safe harbor**: to rely on DMCA safe harbor (US), register a **designated DMCA agent** with the U.S. Copyright Office and publish the policy in the Terms of Service. Add a repeat-infringer policy.
 
 ## 4. Architecture changes needed for hosting
+
+These are additions on top of the self-hosted app (see [section 0](#0-guiding-principle-self-hosting-always-gets-full-functionality)), needed only to run BookMiro as a shared, multi-tenant, paid service - not requirements for personal self-hosting (that's covered in [SELF_HOSTING.md](./SELF_HOSTING.md)).
 
 The current app persists each book on the local filesystem via `backend/app/models/project.py` (`ProjectManager` writes `project.json`, `episodes.json`, `graph.json` under `uploads/`). Hosting a shared multi-user library needs shared, durable storage.
 
