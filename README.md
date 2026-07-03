@@ -102,9 +102,8 @@ Reads `.env` from the project root and maps ports `3000` (frontend) / `5001` (ba
 
 ### Other ways to run it
 
-Self-hosting BookMiro (locally, via Docker, on Render, or on any other host) always gives you
-100% of the functionality - see **[SELF_HOSTING.md](./SELF_HOSTING.md)** for a one-click Render
-deployment, the full environment variable reference, and data/backup notes.
+See [SELF_HOSTING.md](./SELF_HOSTING.md) for Render deployment, the full environment variable
+reference, and data/backup notes.
 
 ## How It Works
 

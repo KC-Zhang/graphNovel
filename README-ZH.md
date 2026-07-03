@@ -102,7 +102,7 @@ docker compose up -d
 
 ### 其他部署方式
 
-无论是本地运行、Docker，还是部署到 Render 或其他任意主机，自行部署 BookMiro 都能获得 100% 的完整功能——完整的 Render 一键部署说明、环境变量参考、数据备份说明详见 **[SELF_HOSTING-ZH.md](./SELF_HOSTING-ZH.md)**。
+Render 部署说明、完整环境变量参考、数据备份说明见 [SELF_HOSTING-ZH.md](./SELF_HOSTING-ZH.md)。
 
 ## 工作原理
 

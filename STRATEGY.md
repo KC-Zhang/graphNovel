@@ -4,21 +4,21 @@ This document captures how BookMiro is structured as an open-source project with
 
 > Legal note: the sections on payments, copyright, and DMCA below are a product/engineering plan, not legal advice. Have a lawyer review Terms of Service, Privacy Policy, and the DMCA process before launch.
 
-## 0. Guiding principle: self-hosting always gets full functionality
+## 0. Self-host vs hosted SaaS
 
-The open-source repo is not a stripped-down trial of a hosted product - it **is** the product. Every reading/graph feature (reading-synced reveal, language-locked extraction, jump-to-source, edge reel, read-tracking, reverse linking) runs identically whether you use it on `localhost`, self-host it on your own server, or (eventually) use the hosted version. Nothing is gated behind a subscription.
+Self-hosting (this repo, as-is) and the future hosted SaaS run identical app code. Section 4's additions (accounts, billing, shared catalog DB, admin/DMCA) are infrastructure for running BookMiro as a shared paid service - not features withheld from self-hosting.
 
-| | Self-hosted (this repo, today) | Hosted SaaS (future, [section 2](#2-hosted-product-model-pay-once-then-free-for-everyone)+) |
+| | Self-hosted (today) | Hosted SaaS (future) |
 |---|---|---|
-| Reading/graph features | All of them | Same (identical app code) |
-| Who provides the LLM key | You | The hosted service |
-| Where books/graphs live | Local files on your machine/server | Shared Postgres + object storage |
-| Users | Just you (single-tenant) | Accounts, multi-tenant |
-| Cost | Your own LLM usage only | Pay-once-per-book unlock |
-| Shared public library | No - your books are yours | Yes - unlocked books become free for everyone |
-| Rights acknowledgment / DMCA takedown | Not applicable (private use) | Required (section 3) |
+| Reading/graph features | All | Same code |
+| LLM key | Yours | Provided by the service |
+| Storage | Local files | Postgres + object storage |
+| Users | Single-tenant | Accounts, multi-tenant |
+| Cost | Your LLM usage | Pay-once-per-book unlock |
+| Shared public library | No | Yes |
+| Rights ack / DMCA takedown | N/A | Required (section 3) |
 
-Concretely: everything under [section 4](#4-architecture-changes-needed-for-hosting) below (accounts, billing, shared catalog DB, admin/DMCA) is **additive infrastructure for running BookMiro as a shared paid service** - not a list of features missing from self-hosting. See **[SELF_HOSTING.md](./SELF_HOSTING.md)** for deployment instructions (local, Docker, Render, or any other host) and the full environment variable reference.
+Deployment instructions and the env var reference: [SELF_HOSTING.md](./SELF_HOSTING.md).
 
 ## 1. Repository structure (open-core)
 
