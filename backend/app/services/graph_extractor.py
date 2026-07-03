@@ -16,8 +16,12 @@ from ..utils.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
-# 单次送入 LLM 的最大字符数（过长的章节会被拆分）
-_MAX_CHARS_PER_CALL = 6000
+# 单次送入 LLM 的最大字符数。
+#
+# Reader navigation uses meaningful book sections/chapters, but extraction should stay
+# closer to the old small-section granularity. Full chapters cause the model to
+# summarize and skip incidental entities/relations.
+_MAX_CHARS_PER_CALL = 3000
 
 
 def detect_language(text: str) -> str:
