@@ -10,7 +10,7 @@ from flask import request, jsonify
 
 from . import graph_bp
 from ..config import Config
-from ..services.book_segmenter import segment_book
+from ..services.book_segmenter import segment_book_hybrid
 from ..services.graph_extractor import detect_language
 from ..services.extraction_manager import ExtractionManager
 from ..services.text_processor import TextProcessor
@@ -142,7 +142,7 @@ def repair_project(project_id: str):
             "error": t('api.textNotFound')
         }), 404
 
-    episodes = segment_book(text)
+    episodes = segment_book_hybrid(text)
     if not episodes:
         return jsonify({
             "success": False,
@@ -230,7 +230,7 @@ def upload_book():
         ProjectManager.save_extracted_text(project.project_id, full_text)
 
         # 分章
-        episodes = segment_book(full_text)
+        episodes = segment_book_hybrid(full_text)
         if not episodes:
             ProjectManager.delete_project(project.project_id)
             return jsonify({

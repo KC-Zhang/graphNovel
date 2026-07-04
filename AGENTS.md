@@ -32,7 +32,8 @@ This file is a living index for future agents working in this repo. Update it wh
 - The reader chapter navigation uses a compact slider/scrubber instead of a long horizontal strip of numbered chips.
 - Production uses Render services: `bookmiro-backend` and `bookmiro-frontend`.
 - Entity extraction chunks are capped at 6000 characters per LLM call.
-- Book segmentation chooses heading runs by deterministic `tiktoken` token-span scoring; it does not use LLMs or book-specific TOC rules.
+- Deterministic fallback segmentation chooses heading runs by `tiktoken` token-span scoring without book-specific TOC rules.
+- Upload/repair use an LLM-guided segmentation wrapper first: the LLM only infers heading/title structure from an early sample, while deterministic code still finds full-book offsets and falls back on failure.
 
 ## Problems And Fixes
 
@@ -50,6 +51,9 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - Problem: dense front matter such as table-of-contents rows can look like real chapter headings.
   Fix: chapter candidates are grouped into ordered runs and early dense duplicate runs are filtered by estimated token spans before exact-offset slicing.
+
+- Problem: The Laws of Human Nature LLM structure probe confidently selected the front-matter TOC pattern (`same_line_number_title`) instead of body chapter starts.
+  Fix: LLM-guided segmentation logs strategy/validation details, rejects tiny-span TOC-like strategies, and falls back to deterministic standalone-number/title/subtitle segmentation.
 
 ## Maintenance Notes
 

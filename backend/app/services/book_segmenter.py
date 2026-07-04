@@ -4,12 +4,18 @@
 """
 
 import re
+import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from statistics import median
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Callable
 
 import tiktoken
 
+from ..utils.llm_client import LLMClient
+
+
+logger = logging.getLogger(__name__)
 
 # 章节标题识别的正则（按行匹配，行需较短）
 _SEMANTIC_CHAPTER_PATTERNS = [
@@ -33,6 +39,8 @@ _FALLBACK_MIN_SIZE = 1500
 _FALLBACK_TITLE_MAX_LEN = 72
 _DENSE_RUN_MAX_MEDIAN_TOKENS = 120
 _DUPLICATE_RUN_MIN_RATIO = 4
+_LLM_STRUCTURE_SAMPLE_TOKENS = 20000
+_LLM_STRUCTURE_MIN_CONFIDENCE = 0.65
 
 _BOILERPLATE_TITLE_LINES = {
     "contents",
@@ -40,6 +48,33 @@ _BOILERPLATE_TITLE_LINES = {
     "copyright",
     "all rights reserved",
 }
+
+_STRUCTURE_HEADING_PATTERNS = {
+    "chapter_number",
+    "standalone_number_then_title",
+    "same_line_number_title",
+    "chinese_numbered",
+    "unknown",
+}
+
+_STRUCTURE_TITLE_MODES = {
+    "auto",
+    "heading_line",
+    "next_lines",
+    "same_line_after_number",
+}
+
+
+@dataclass(frozen=True)
+class BookStructureStrategy:
+    """LLM-detected rules for how this book marks and names body chapters."""
+
+    confidence: float
+    heading_pattern: str
+    title_mode: str = "auto"
+    title_lines_after_heading: int = 0
+    subtitle_lines_after_title: int = 0
+    ignore_toc: bool = True
 
 
 @lru_cache(maxsize=1)
@@ -52,6 +87,158 @@ def _count_tokens(text: str) -> int:
     if not text:
         return 0
     return len(_token_encoding().encode(text))
+
+
+def _truncate_to_token_budget(text: str, max_tokens: int) -> str:
+    if not text:
+        return ""
+    tokens = _token_encoding().encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    return _token_encoding().decode(tokens[:max_tokens])
+
+
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _parse_structure_strategy(payload: Dict[str, Any]) -> Optional[BookStructureStrategy]:
+    if not isinstance(payload, dict):
+        return None
+
+    title_strategy = payload.get("title_strategy")
+    if not isinstance(title_strategy, dict):
+        title_strategy = {}
+
+    heading_pattern = str(
+        payload.get("heading_pattern")
+        or payload.get("chapter_pattern")
+        or "unknown"
+    ).strip().lower().replace("-", "_")
+    if heading_pattern not in _STRUCTURE_HEADING_PATTERNS:
+        heading_pattern = "unknown"
+
+    title_mode = str(
+        title_strategy.get("mode")
+        or payload.get("title_mode")
+        or "auto"
+    ).strip().lower().replace("-", "_")
+    if title_mode not in _STRUCTURE_TITLE_MODES:
+        title_mode = "auto"
+
+    return BookStructureStrategy(
+        confidence=_bounded_float(payload.get("confidence"), 0.0, 0.0, 1.0),
+        heading_pattern=heading_pattern,
+        title_mode=title_mode,
+        title_lines_after_heading=_bounded_int(
+            title_strategy.get("title_lines_after_heading", payload.get("title_lines_after_heading")),
+            0,
+            0,
+            3,
+        ),
+        subtitle_lines_after_title=_bounded_int(
+            title_strategy.get("subtitle_lines_after_title", payload.get("subtitle_lines_after_title")),
+            0,
+            0,
+            2,
+        ),
+        ignore_toc=bool(payload.get("ignore_toc", True)),
+    )
+
+
+def analyze_book_structure(
+    text: str,
+    llm_client: Optional[LLMClient] = None,
+) -> Optional[BookStructureStrategy]:
+    """
+    Ask the primary LLM to infer the book's chapter structure from the
+    beginning of the extracted text. The LLM does not return offsets.
+    """
+    if not text or not text.strip():
+        return None
+
+    try:
+        client = llm_client or LLMClient()
+    except Exception as exc:
+        logger.info("跳过 LLM 分章结构分析，LLM 未配置或不可用: %s", exc)
+        return None
+
+    sample = _truncate_to_token_budget(text, _LLM_STRUCTURE_SAMPLE_TOKENS)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You inspect flattened book text and infer the chapter structure. "
+                "Return only valid JSON. Do not return chapter offsets or full segmentation. "
+                "Decide how body chapter starts are marked and how display titles should be built."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Infer the structure for deterministic segmentation.\n\n"
+                "Allowed heading_pattern values:\n"
+                "- chapter_number: lines like Chapter 1, chapter 1, CHAPTER I, or 第1章\n"
+                "- standalone_number_then_title: a line containing only 1, then title lines after it\n"
+                "- same_line_number_title: a line like 1   Master Your Emotional Self\n"
+                "- chinese_numbered: lines like 第一章 标题 or 第一回 标题\n"
+                "- unknown\n\n"
+                "Allowed title_strategy.mode values:\n"
+                "- heading_line: title is on the heading line itself\n"
+                "- next_lines: title is in short non-empty lines after the heading marker\n"
+                "- same_line_after_number: title follows a number on the same line\n"
+                "- auto\n\n"
+                "Return JSON with this exact shape:\n"
+                "{\n"
+                '  "confidence": 0.0,\n'
+                '  "heading_pattern": "unknown",\n'
+                '  "ignore_toc": true,\n'
+                '  "front_matter_markers": ["Contents"],\n'
+                '  "title_strategy": {\n'
+                '    "mode": "auto",\n'
+                '    "title_lines_after_heading": 0,\n'
+                '    "subtitle_lines_after_title": 0\n'
+                "  },\n"
+                '  "example_headings": ["Chapter 1"]\n'
+                "}\n\n"
+                "Use title_lines_after_heading and subtitle_lines_after_title to describe how each "
+                "chapter display title should be constructed from nearby lines.\n\n"
+                f"Book sample:\n\"\"\"\n{sample}\n\"\"\""
+            ),
+        },
+    ]
+
+    try:
+        payload = client.chat_json(messages=messages, temperature=0.0, max_tokens=1200)
+    except Exception as exc:
+        logger.warning("LLM 分章结构分析失败，回退到确定性分章: %s", exc)
+        return None
+
+    strategy = _parse_structure_strategy(payload)
+    if not strategy:
+        return None
+    logger.info(
+        "LLM 分章结构分析结果: pattern=%s title_mode=%s title_lines=%s subtitle_lines=%s confidence=%.2f ignore_toc=%s",
+        strategy.heading_pattern,
+        strategy.title_mode,
+        strategy.title_lines_after_heading,
+        strategy.subtitle_lines_after_title,
+        strategy.confidence,
+        strategy.ignore_toc,
+    )
+    return strategy
 
 
 def _is_semantic_heading(line: str) -> bool:
@@ -72,6 +259,47 @@ def _numeric_heading_value(line: str) -> Optional[int]:
         return None
     match = _NUMERIC_HEADING_PATTERN.match(stripped)
     return int(match.group(1)) if match else None
+
+
+def _same_line_number_title_parts(line: str) -> Optional[tuple[int, str]]:
+    stripped = re.sub(r'\s+', ' ', (line or '').strip())
+    if not stripped or len(stripped) > 120:
+        return None
+    match = re.match(r'^([0-9]{1,3})\s+(.+)$', stripped)
+    if not match:
+        return None
+    title = _clean_title_candidate(match.group(2))
+    if not _is_chapter_title_fragment(title):
+        return None
+    return int(match.group(1)), title
+
+
+def _contains_sentence_punctuation(line: str) -> bool:
+    return bool(re.search(r'[。！？.!?]', line or ''))
+
+
+def _is_numbered_title_line(line: str) -> bool:
+    line = _clean_title_candidate(line)
+    if not _is_chapter_title_fragment(line):
+        return False
+    if _contains_sentence_punctuation(line):
+        return False
+    if len(line) > 80:
+        return False
+    if len(line.split()) > 10:
+        return False
+    return True
+
+
+def _standalone_number_title_indices(lines: List[str]) -> List[int]:
+    indices: List[int] = []
+    for i, line in enumerate(lines):
+        if _numeric_heading_value(line) is None:
+            continue
+        _, title = _next_nonempty_line(lines, i + 1)
+        if _is_numbered_title_line(title):
+            indices.append(i)
+    return indices
 
 
 def _chapter_number_label(line: str) -> Optional[str]:
@@ -153,6 +381,10 @@ def _heading_number_at(lines: List[str], line_no: int) -> Optional[int]:
     if numeric_value is not None:
         return numeric_value
 
+    same_line_number_title = _same_line_number_title_parts(line)
+    if same_line_number_title is not None:
+        return same_line_number_title[0]
+
     english = re.match(r'^\s*(?:chapter|part|book)\s+([0-9]+|[ivxlcdm]+)\b', line, re.IGNORECASE)
     if english:
         raw = english.group(1)
@@ -171,7 +403,7 @@ def _compact_alpha(line: str) -> str:
 
 def _is_chapter_marker_line(line: str) -> bool:
     """识别 PDF 中常见的独立章节标记，如 C H A P T E R。"""
-    return _compact_alpha(line) == 'chapter'
+    return _compact_alpha(line) == 'chapter' and not re.search(r'\d', line or '')
 
 
 def _next_nonempty_line(lines: List[str], start: int) -> tuple[Optional[int], str]:
@@ -224,6 +456,9 @@ def _should_join_chapter_title_line(previous: str, candidate: str) -> bool:
     if re.search(r'[。！？.!?]\s*$', candidate):
         return False
     if previous.endswith((',', ':', ';', '-', '—', '–', '&')):
+        return True
+    previous_last_word = re.sub(r'[^A-Za-z]+', '', previous.split()[-1]).lower() if previous.split() else ''
+    if previous_last_word in {'and', 'or', 'of', 'to', 'by', 'with', 'from', 'into', 'the'}:
         return True
     return len(candidate) <= 24 and len(candidate.split()) <= 3
 
@@ -330,15 +565,29 @@ def _select_heading_indices(
         return heading_indices
 
     first_dense = first["median_tokens"] <= _DENSE_RUN_MAX_MEDIAN_TOKENS
+    first_irregular_before_body = (
+        bool(first["numbers"])
+        and bool(best["numbers"])
+        and first["numbers"][0] != 1
+        and best["numbers"][0] == 1
+    )
     much_larger_later = best["median_tokens"] >= max(
         first["median_tokens"] * _DUPLICATE_RUN_MIN_RATIO,
         _DENSE_RUN_MAX_MEDIAN_TOKENS,
     )
-    if not (first_dense and much_larger_later):
+    if not ((first_dense or first_irregular_before_body) and much_larger_later):
         return heading_indices
 
-    cutoff = best["first_offset"]
-    return [line_no for line_no in heading_indices if offsets[line_no] >= cutoff]
+    start_position = best["first_position"]
+    end_position = len(heading_indices)
+    following_runs = [run for run in runs if run["first_position"] > start_position]
+    if following_runs:
+        next_run = min(following_runs, key=lambda run: run["first_position"])
+        next_is_much_smaller = next_run["median_tokens"] * _DUPLICATE_RUN_MIN_RATIO <= best["median_tokens"]
+        if next_run["median_tokens"] <= _DENSE_RUN_MAX_MEDIAN_TOKENS or next_is_much_smaller:
+            end_position = next_run["first_position"]
+
+    return heading_indices[start_position:end_position]
 
 
 def _heading_title(lines: List[str], line_no: int) -> str:
@@ -353,38 +602,273 @@ def _heading_title(lines: List[str], line_no: int) -> str:
         if number_label:
             return f"Chapter {number_label}"
         return "Chapter"
-    if not re.match(r'^\s*(chapter|part|book)\s+', title, re.IGNORECASE):
+
+    english = re.match(
+        r'^\s*(chapter|part|book)\s+([0-9]+|[ivxlcdm]+)\b[\s.:\-–—]*(.*)$',
+        title,
+        re.IGNORECASE,
+    )
+    if not english:
+        return title
+    rest = _clean_title_candidate(english.group(3))
+    if rest and _is_chapter_title_fragment(rest):
         return title
     if line_no + 1 >= len(lines):
         return title
-    next_line = lines[line_no + 1].strip()
-    if not next_line or len(next_line) > _MAX_HEADING_LEN or _is_semantic_heading(next_line):
-        return title
-    if _numeric_heading_value(next_line) is not None:
-        return title
-    return f"{title} — {next_line}"
+    collected_title, _ = _collect_numbered_title_after(lines, line_no + 1)
+    if collected_title:
+        return f"{title} — {collected_title}"
+    return title
+
+
+def _line_offsets(lines: List[str]) -> List[int]:
+    offsets: List[int] = []
+    pos = 0
+    for line in lines:
+        offsets.append(pos)
+        pos += len(line) + 1  # +1 为换行符
+    return offsets
+
+
+def _build_episodes_from_headings(
+    text: str,
+    lines: List[str],
+    offsets: List[int],
+    heading_indices: List[int],
+    title_for_line: Callable[[int], str],
+) -> List[Dict[str, Any]]:
+    if len(heading_indices) < 2:
+        return []
+
+    episodes: List[Dict[str, Any]] = []
+
+    first_heading_line = heading_indices[0]
+    preamble = text[:offsets[first_heading_line]].strip()
+    if len(preamble) >= 200:
+        episodes.append({
+            "title": _default_preamble_title(preamble),
+            "start_char": 0,
+            "end_char": offsets[first_heading_line],
+        })
+
+    for idx, line_no in enumerate(heading_indices):
+        start = offsets[line_no]
+        if idx + 1 < len(heading_indices):
+            end = offsets[heading_indices[idx + 1]]
+        else:
+            end = len(text)
+        episodes.append({
+            "title": title_for_line(line_no),
+            "start_char": start,
+            "end_char": end,
+        })
+
+    return _merge_tiny_episodes(text, episodes)
+
+
+def _is_english_chapter_number_line(line: str) -> bool:
+    return bool(re.match(r'^\s*(?:chapter|part|book)\s+([0-9]+|[ivxlcdm]+)\b', line or '', re.IGNORECASE))
+
+
+def _collect_title_lines_after(lines: List[str], start: int, count: int) -> List[str]:
+    title_lines: List[str] = []
+    cursor = start
+    for _ in range(count):
+        line_no, line = _next_nonempty_line(lines, cursor)
+        if line_no is None:
+            break
+        clean = _clean_title_candidate(line)
+        if not _is_chapter_title_fragment(clean):
+            break
+        title_lines.append(clean)
+        cursor = line_no + 1
+    return title_lines
+
+
+def _collect_structured_title_parts_after(
+    lines: List[str],
+    start: int,
+    title_line_groups: int,
+    subtitle_line_groups: int,
+) -> List[str]:
+    parts: List[str] = []
+    cursor = start
+    total_groups = title_line_groups + subtitle_line_groups
+    for group_index in range(total_groups):
+        line_no, line = _next_nonempty_line(lines, cursor)
+        if line_no is None:
+            break
+        clean = _clean_title_candidate(line)
+        if not _is_chapter_title_fragment(clean):
+            break
+        if group_index >= title_line_groups and _contains_sentence_punctuation(clean):
+            break
+
+        group_lines = [clean]
+        cursor = line_no + 1
+
+        if group_index < title_line_groups:
+            while True:
+                next_idx, next_line = _next_nonempty_line(lines, cursor)
+                if next_idx is None or not _should_join_chapter_title_line(group_lines[-1], next_line):
+                    break
+                group_lines.append(_clean_title_candidate(next_line))
+                cursor = next_idx + 1
+
+        parts.append(' '.join(group_lines))
+
+    return parts
+
+
+def _collect_numbered_title_after(lines: List[str], start: int) -> tuple[str, int]:
+    line_no, line = _next_nonempty_line(lines, start)
+    if line_no is None or not _is_numbered_title_line(line):
+        return "", start
+
+    title_lines = [_clean_title_candidate(line)]
+    cursor = line_no + 1
+    while True:
+        next_idx, next_line = _next_nonempty_line(lines, cursor)
+        if next_idx is None or not _should_join_chapter_title_line(title_lines[-1], next_line):
+            break
+        clean_next = _clean_title_candidate(next_line)
+        if not _is_numbered_title_line(clean_next):
+            break
+        title_lines.append(clean_next)
+        cursor = next_idx + 1
+
+    return ' '.join(title_lines), cursor
+
+
+def _numbered_heading_title(lines: List[str], line_no: int) -> str:
+    number = _heading_number_at(lines, line_no)
+    if number is None:
+        return _heading_title(lines, line_no)
+
+    title, cursor = _collect_numbered_title_after(lines, line_no + 1)
+    if not title:
+        return _heading_title(lines, line_no)
+
+    parts = [title]
+    subtitle_idx, subtitle = _next_nonempty_line(lines, cursor)
+    if subtitle_idx is not None and _is_numbered_title_line(subtitle):
+        parts.append(_clean_title_candidate(subtitle))
+
+    return f"Chapter {number} — {' — '.join(parts)}"
+
+
+def _strategy_heading_indices(lines: List[str], strategy: BookStructureStrategy) -> List[int]:
+    indices: List[int] = []
+    for i, line in enumerate(lines):
+        if strategy.heading_pattern == "chapter_number":
+            if _is_chapter_marker_line(line) or _is_english_chapter_number_line(line) or re.match(
+                r'^\s*第\s*[0-9一二三四五六七八九十百千零两〇]+\s*[章回节卷篇部集]',
+                line or '',
+            ):
+                indices.append(i)
+        elif strategy.heading_pattern == "standalone_number_then_title":
+            if _numeric_heading_value(line) is not None:
+                _, title = _next_nonempty_line(lines, i + 1)
+                if _is_chapter_title_fragment(title):
+                    indices.append(i)
+        elif strategy.heading_pattern == "same_line_number_title":
+            if _same_line_number_title_parts(line) is not None:
+                indices.append(i)
+        elif strategy.heading_pattern == "chinese_numbered":
+            if re.match(r'^\s*第\s*[0-9一二三四五六七八九十百千零两〇]+\s*[章回节卷篇部集]', line or ''):
+                indices.append(i)
+
+    return indices
+
+
+def _strategy_heading_title(lines: List[str], line_no: int, strategy: BookStructureStrategy) -> str:
+    line = lines[line_no].strip()
+    number = _heading_number_at(lines, line_no)
+
+    if strategy.title_mode == "heading_line":
+        return _heading_title(lines, line_no)
+
+    title_parts: List[str] = []
+    following_lines_to_collect = strategy.title_lines_after_heading + strategy.subtitle_lines_after_title
+
+    english = re.match(
+        r'^\s*(chapter|part|book)\s+([0-9]+|[ivxlcdm]+)\b[\s.:\-–—]*(.*)$',
+        line,
+        re.IGNORECASE,
+    )
+    if english:
+        rest = _clean_title_candidate(english.group(3))
+        if rest and _is_chapter_title_fragment(rest):
+            title_parts.append(rest)
+            following_lines_to_collect = strategy.subtitle_lines_after_title
+
+    same_line = _same_line_number_title_parts(line)
+    if same_line and strategy.title_mode in {"auto", "same_line_after_number"}:
+        title_parts.append(same_line[1])
+        following_lines_to_collect = strategy.subtitle_lines_after_title
+
+    if following_lines_to_collect:
+        if title_parts:
+            title_parts.extend(_collect_structured_title_parts_after(lines, line_no + 1, 0, following_lines_to_collect))
+        else:
+            title_parts.extend(
+                _collect_structured_title_parts_after(
+                    lines,
+                    line_no + 1,
+                    strategy.title_lines_after_heading,
+                    strategy.subtitle_lines_after_title,
+                )
+            )
+
+    if title_parts:
+        prefix = f"Chapter {number}" if number is not None else _heading_title(lines, line_no)
+        return f"{prefix} — {' — '.join(title_parts)}"
+
+    return _heading_title(lines, line_no)
+
+
+def _split_by_structure_strategy(text: str, strategy: BookStructureStrategy) -> List[Dict[str, Any]]:
+    if strategy.confidence < _LLM_STRUCTURE_MIN_CONFIDENCE or strategy.heading_pattern == "unknown":
+        return []
+
+    lines = text.split('\n')
+    offsets = _line_offsets(lines)
+    heading_indices = _strategy_heading_indices(lines, strategy)
+    heading_indices = _select_heading_indices(heading_indices, lines, offsets, text)
+
+    return _build_episodes_from_headings(
+        text,
+        lines,
+        offsets,
+        heading_indices,
+        lambda line_no: _strategy_heading_title(lines, line_no, strategy),
+    )
 
 
 def _split_by_headings(text: str) -> List[Dict[str, Any]]:
     """按章节标题切分。返回带 start_char/end_char/title 的段落列表；若标题过少返回空。"""
     lines = text.split('\n')
-    # 记录每行在原文中的起始偏移
-    offsets = []
-    pos = 0
-    for line in lines:
-        offsets.append(pos)
-        pos += len(line) + 1  # +1 为换行符
+    offsets = _line_offsets(lines)
 
     chapter_marker_indices = _chapter_marker_indices(lines)
     semantic_heading_indices = [i for i, line in enumerate(lines) if _is_semantic_heading(line)]
+    standalone_title_indices = _standalone_number_title_indices(lines)
     numeric_candidates = [
         (i, _numeric_heading_value(line))
         for i, line in enumerate(lines)
         if _numeric_heading_value(line) is not None
     ]
+    title_for_line: Callable[[int], str] = lambda line_no: _heading_title(lines, line_no)
 
     if len(chapter_marker_indices) >= 2:
         heading_indices = chapter_marker_indices
+    elif _looks_like_numbered_chapter_sequence(
+        [value for value in (_numeric_heading_value(lines[i]) for i in standalone_title_indices) if value is not None],
+        [offsets[i] for i in standalone_title_indices],
+        text,
+    ):
+        heading_indices = standalone_title_indices
+        title_for_line = lambda line_no: _numbered_heading_title(lines, line_no)
     elif len(semantic_heading_indices) >= 2:
         heading_indices = semantic_heading_indices
     else:
@@ -402,34 +886,7 @@ def _split_by_headings(text: str) -> List[Dict[str, Any]]:
     if len(heading_indices) < 2:
         return []
 
-    episodes: List[Dict[str, Any]] = []
-
-    # 第一个标题之前的内容作为"前言"章节（若有实质内容）
-    first_heading_line = heading_indices[0]
-    preamble = text[:offsets[first_heading_line]].strip()
-    if len(preamble) >= 200:
-        episodes.append({
-            "title": _default_preamble_title(preamble),
-            "start_char": 0,
-            "end_char": offsets[first_heading_line],
-        })
-
-    for idx, line_no in enumerate(heading_indices):
-        start = offsets[line_no]
-        if idx + 1 < len(heading_indices):
-            end = offsets[heading_indices[idx + 1]]
-        else:
-            end = len(text)
-        title = _heading_title(lines, line_no)
-        episodes.append({
-            "title": title,
-            "start_char": start,
-            "end_char": end,
-        })
-
-    # 合并过短的章节到前一章，避免碎片
-    episodes = _merge_tiny_episodes(text, episodes)
-    return episodes
+    return _build_episodes_from_headings(text, lines, offsets, heading_indices, title_for_line)
 
 
 def _default_preamble_title(preamble: str) -> str:
@@ -557,6 +1014,77 @@ def _fallback_title(segment_text: str, index: int, is_cjk: bool, common_lines: S
     return f"第 {index + 1} 节" if is_cjk else f"Section {index + 1}"
 
 
+def _finalize_episodes(text: str, episodes: List[Dict[str, Any]], used_fallback: bool) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    is_cjk = bool(re.search(r'[\u4e00-\u9fff]', text[:2000]))
+    common_lines = _common_short_lines(text) if used_fallback else set()
+    for i, ep in enumerate(episodes):
+        segment_text = text[ep["start_char"]:ep["end_char"]].strip()
+        title = ep.get("title")
+        if not title:
+            title = _fallback_title(segment_text, i, is_cjk, common_lines)
+        result.append({
+            "index": i,
+            "title": title,
+            "start_char": ep["start_char"],
+            "end_char": ep["end_char"],
+            "char_count": len(segment_text),
+            "text": segment_text,
+        })
+
+    return result
+
+
+def _episode_validation_report(text: str, episodes: List[Dict[str, Any]]) -> tuple[bool, Dict[str, Any]]:
+    if len(episodes) < 2:
+        return False, {"reason": "too_few_episodes", "episodes": len(episodes)}
+
+    body_episodes = [
+        ep for ep in episodes
+        if ep.get("title") not in {"Preface", "前言"}
+    ]
+    if len(body_episodes) < 2 or len(body_episodes) > 120:
+        return False, {
+            "reason": "implausible_body_episode_count",
+            "episodes": len(episodes),
+            "body_episodes": len(body_episodes),
+        }
+
+    token_spans = [
+        _count_tokens(text[ep["start_char"]:ep["end_char"]].strip())
+        for ep in body_episodes
+    ]
+    if not token_spans or max(token_spans) < 10:
+        return False, {
+            "reason": "tiny_max_token_span",
+            "episodes": len(episodes),
+            "body_episodes": len(body_episodes),
+            "max_tokens": max(token_spans) if token_spans else 0,
+        }
+
+    median_tokens = median(token_spans)
+    max_tokens = max(token_spans)
+    report = {
+        "reason": "ok",
+        "episodes": len(episodes),
+        "body_episodes": len(body_episodes),
+        "median_tokens": int(median_tokens),
+        "max_tokens": int(max_tokens),
+    }
+    if len(text) > 10000 and median_tokens < 80:
+        report["reason"] = "median_token_span_too_small"
+        return False, report
+
+    return True, report
+
+
+def _episodes_are_usable(text: str, episodes: List[Dict[str, Any]]) -> bool:
+    usable, _ = _episode_validation_report(text, episodes)
+    return usable
+
+    return True
+
+
 def segment_book(text: str) -> List[Dict[str, Any]]:
     """
     将书籍文本切分为有序章节。
@@ -576,21 +1104,45 @@ def segment_book(text: str) -> List[Dict[str, Any]]:
         episodes = _split_fixed_size(text)
         used_fallback = True
 
-    result: List[Dict[str, Any]] = []
-    is_cjk = bool(re.search(r'[\u4e00-\u9fff]', text[:2000]))
-    common_lines = _common_short_lines(text) if used_fallback else set()
-    for i, ep in enumerate(episodes):
-        segment_text = text[ep["start_char"]:ep["end_char"]].strip()
-        title = ep.get("title")
-        if not title:
-            title = _fallback_title(segment_text, i, is_cjk, common_lines)
-        result.append({
-            "index": i,
-            "title": title,
-            "start_char": ep["start_char"],
-            "end_char": ep["end_char"],
-            "char_count": len(segment_text),
-            "text": segment_text,
-        })
+    return _finalize_episodes(text, episodes, used_fallback)
 
-    return result
+
+def segment_book_hybrid(text: str, llm_client: Optional[LLMClient] = None) -> List[Dict[str, Any]]:
+    """
+    Try LLM-guided structure detection first, then fall back to deterministic
+    segmentation if the LLM is unavailable or its strategy does not validate.
+    """
+    if not text or not text.strip():
+        return []
+
+    strategy = analyze_book_structure(text, llm_client=llm_client)
+    if strategy:
+        episodes = _split_by_structure_strategy(text, strategy)
+        usable, validation = _episode_validation_report(text, episodes)
+        if usable:
+            logger.info(
+                "使用 LLM 分章结构策略: pattern=%s title_mode=%s confidence=%.2f episodes=%s body_episodes=%s median_tokens=%s max_tokens=%s",
+                strategy.heading_pattern,
+                strategy.title_mode,
+                strategy.confidence,
+                validation.get("episodes"),
+                validation.get("body_episodes"),
+                validation.get("median_tokens"),
+                validation.get("max_tokens"),
+            )
+            return _finalize_episodes(text, episodes, used_fallback=False)
+        logger.info(
+            "LLM 分章结构策略未通过校验，回退到确定性分章: pattern=%s title_mode=%s confidence=%.2f reason=%s episodes=%s body_episodes=%s median_tokens=%s max_tokens=%s",
+            strategy.heading_pattern,
+            strategy.title_mode,
+            strategy.confidence,
+            validation.get("reason"),
+            validation.get("episodes"),
+            validation.get("body_episodes"),
+            validation.get("median_tokens"),
+            validation.get("max_tokens"),
+        )
+
+    fallback_episodes = segment_book(text)
+    logger.info("确定性分章完成: episodes=%s", len(fallback_episodes))
+    return fallback_episodes
