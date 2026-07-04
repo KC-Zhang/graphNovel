@@ -1,3 +1,4 @@
+import app.services.graph_extractor as graph_extractor_module
 from app.services.graph_extractor import GraphExtractor, _MAX_CHARS_PER_CALL
 
 
@@ -26,6 +27,15 @@ class RecordingLLM:
 class FailingLLM:
     def chat_json(self, messages, **kwargs):
         raise RuntimeError("Access to model denied. Please make sure you are eligible for using the model.")
+
+
+class UnexpectedFallbackLLM:
+    def __init__(self):
+        self.calls = 0
+
+    def chat_json(self, messages, **kwargs):
+        self.calls += 1
+        raise AssertionError("fallback should only be called after primary failure")
 
 
 def test_long_episode_is_extracted_in_small_section_sized_chunks():
@@ -75,3 +85,39 @@ def test_failed_primary_llm_uses_fallback_client():
     assert result["error"] is None
     assert len(fallback.excerpts) == 1
     assert graph["node_count"] == 1
+
+
+def test_successful_primary_llm_does_not_call_fallback_client():
+    primary = RecordingLLM()
+    fallback = UnexpectedFallbackLLM()
+    extractor = GraphExtractor(llm_client=primary, fallback_llm_client=fallback)
+
+    result = extractor.extract_episode({"index": 5, "text": "Alice meets Bob."}, "English")
+    graph = extractor.to_graph()
+
+    assert result["total_chunks"] == 1
+    assert result["failed_chunks"] == 0
+    assert result["error"] is None
+    assert len(primary.excerpts) == 1
+    assert fallback.calls == 0
+    assert graph["node_count"] == 1
+
+
+def test_default_fallback_client_is_created_lazily(monkeypatch):
+    created_fallbacks = []
+
+    class FakeDefaultLLM(RecordingLLM):
+        @classmethod
+        def openrouter_fallback(cls):
+            created_fallbacks.append(True)
+            return UnexpectedFallbackLLM()
+
+    monkeypatch.setattr(graph_extractor_module, "LLMClient", FakeDefaultLLM)
+    extractor = GraphExtractor()
+
+    result = extractor.extract_episode({"index": 6, "text": "Alice meets Bob."}, "English")
+
+    assert result["total_chunks"] == 1
+    assert result["failed_chunks"] == 0
+    assert result["error"] is None
+    assert created_fallbacks == []

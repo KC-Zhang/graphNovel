@@ -17,6 +17,7 @@ dependencies = [
     
     # LLM 相关
     "openai>=1.0.0",
+    "tiktoken>=0.8.0",
     
     # 文件处理
     "PyMuPDF>=1.24.0",

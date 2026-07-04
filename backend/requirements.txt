@@ -12,6 +12,8 @@ flask-cors>=6.0.0
 # ============= LLM 相关 =============
 # OpenAI SDK（统一使用 OpenAI 格式调用 LLM）
 openai>=1.0.0
+# OpenAI tokenizer used for deterministic chapter segmentation thresholds
+tiktoken>=0.8.0
 
 # ============= Zep Cloud =============
 zep-cloud==3.13.0

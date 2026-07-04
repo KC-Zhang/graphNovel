@@ -152,3 +152,101 @@ The dynamics of a network are similar to visibility in Hollywood.
         "Chapter 10 — Managing the Gatekeeper Artfully",
         "Chapter 11 — Never Eat Alone",
     ]
+
+
+def test_dense_front_matter_heading_run_is_not_used_for_chapters():
+    toc = "\n".join([
+        "Chapter 1. Dawn",
+        "Chapter 2. Road",
+        "Chapter 3. Gate",
+        "Chapter 4. Tower",
+        "Chapter 5. River",
+        "Chapter 6. Return",
+    ])
+    body = "\n\n".join(
+        f"Chapter {i}. {title}\n"
+        + ("This is the real body text for the chapter with enough prose to "
+           "separate it from front matter. " * 35)
+        for i, title in [
+            (1, "Dawn"),
+            (2, "Road"),
+            (3, "Gate"),
+            (4, "Tower"),
+            (5, "River"),
+            (6, "Return"),
+        ]
+    )
+    text = f"""
+Sample Book
+
+Contents
+{toc}
+
+Introductory notes and publication material before the actual story.
+This front matter is long enough to become preamble rather than a chapter.
+
+{body}
+""".strip()
+
+    episodes = segment_book(text)
+    chapter_titles = [ep["title"] for ep in episodes if ep["title"].startswith("Chapter ")]
+
+    assert chapter_titles == [
+        "Chapter 1. Dawn",
+        "Chapter 2. Road",
+        "Chapter 3. Gate",
+        "Chapter 4. Tower",
+        "Chapter 5. River",
+        "Chapter 6. Return",
+    ]
+    assert all("real body text" in ep["text"] for ep in episodes if ep["title"].startswith("Chapter "))
+
+
+def test_single_short_chapter_run_is_preserved():
+    text = """
+Chapter 1. One
+Brief real chapter text with a little action.
+
+Chapter 2. Two
+Another compact chapter with enough narrative to read.
+
+Chapter 3. Three
+The final compact chapter resolves the scene.
+""".strip()
+
+    episodes = segment_book(text)
+
+    assert [ep["title"] for ep in episodes] == [
+        "Chapter 1. One",
+        "Chapter 2. Two",
+        "Chapter 3. Three",
+    ]
+
+
+def test_dense_chinese_front_matter_heading_run_is_not_used_for_chapters():
+    toc = "\n".join([
+        "第一章 清晨",
+        "第二章 远行",
+        "第三章 相逢",
+    ])
+    body = "\n\n".join(
+        title + "\n" + ("这是章节正文，人物在场景中行动并产生新的关系。" * 80)
+        for title in ["第一章 清晨", "第二章 远行", "第三章 相逢"]
+    )
+    text = f"""
+样书
+
+目录
+{toc}
+
+序言
+这里是出版说明和前言文字，用来说明故事背景。
+
+{body}
+""".strip()
+
+    episodes = segment_book(text)
+    chapter_titles = [ep["title"] for ep in episodes if ep["title"].startswith("第")]
+
+    assert chapter_titles == ["第一章 清晨", "第二章 远行", "第三章 相逢"]
+    assert all("章节正文" in ep["text"] for ep in episodes if ep["title"].startswith("第"))

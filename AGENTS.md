@@ -26,11 +26,13 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - Keep extraction server-side and provider-agnostic through OpenAI-compatible APIs.
 - Preserve the primary `LLM_*` provider as the first extraction attempt; use OpenRouter only as fallback when configured.
+- Construct and call the configured OpenRouter fallback lazily, only after a primary extraction call raises.
 - OpenRouter fallback uses fixed base URL `https://openrouter.ai/api/v1` and fixed model `deepseek/deepseek-v3.2`; only `OPENROUTER_API_KEY` is read from env.
 - Failed episodes are tracked and retried by `ExtractionManager`; retries should not require resetting the whole book graph.
 - The reader chapter navigation uses a compact slider/scrubber instead of a long horizontal strip of numbered chips.
 - Production uses Render services: `bookmiro-backend` and `bookmiro-frontend`.
 - Entity extraction chunks are capped at 6000 characters per LLM call.
+- Book segmentation chooses heading runs by deterministic `tiktoken` token-span scoring; it does not use LLMs or book-specific TOC rules.
 
 ## Problems And Fixes
 
@@ -45,6 +47,9 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - Problem: long books made the bottom chapter chip strip hard to use.
   Fix: replaced the chip strip with a slider/scrubber that previews chapter number, title, and read percentage.
+
+- Problem: dense front matter such as table-of-contents rows can look like real chapter headings.
+  Fix: chapter candidates are grouped into ordered runs and early dense duplicate runs are filtered by estimated token spans before exact-offset slicing.
 
 ## Maintenance Notes
 

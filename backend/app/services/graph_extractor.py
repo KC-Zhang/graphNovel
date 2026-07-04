@@ -92,10 +92,11 @@ class GraphExtractor:
     ):
         self.llm_client = llm_client or LLMClient()
         self.fallback_llm_client = fallback_llm_client
+        self._fallback_llm_factory: Optional[Callable[[], Optional[LLMClient]]] = None
         if self.fallback_llm_client is None and llm_client is None:
             fallback_factory = getattr(LLMClient, "openrouter_fallback", None)
             if callable(fallback_factory):
-                self.fallback_llm_client = fallback_factory()
+                self._fallback_llm_factory = fallback_factory
         # 规范名 -> node dict
         self._nodes: Dict[str, Dict[str, Any]] = {}
         # 别名/名称（小写规范化）-> 规范名
@@ -253,6 +254,12 @@ class GraphExtractor:
             items.append(label)
         return "; ".join(items)
 
+    def _get_fallback_llm_client(self) -> Optional[LLMClient]:
+        if self.fallback_llm_client is None and self._fallback_llm_factory is not None:
+            self.fallback_llm_client = self._fallback_llm_factory()
+            self._fallback_llm_factory = None
+        return self.fallback_llm_client
+
     def _chat_json_with_fallback(
         self,
         messages: List[Dict[str, str]],
@@ -267,7 +274,8 @@ class GraphExtractor:
                 max_tokens=max_tokens,
             )
         except Exception as primary_error:
-            if not self.fallback_llm_client:
+            fallback_llm_client = self._get_fallback_llm_client()
+            if not fallback_llm_client:
                 raise
             logger.warning(
                 "章节 %s 主 LLM 抽取失败，改用 OpenRouter fallback 重试: %s",
@@ -275,7 +283,7 @@ class GraphExtractor:
                 primary_error,
             )
             try:
-                return self.fallback_llm_client.chat_json(
+                return fallback_llm_client.chat_json(
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,

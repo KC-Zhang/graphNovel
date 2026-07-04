@@ -4,8 +4,11 @@
 """
 
 import re
+from functools import lru_cache
 from statistics import median
 from typing import List, Dict, Any, Optional, Set
+
+import tiktoken
 
 
 # 章节标题识别的正则（按行匹配，行需较短）
@@ -28,6 +31,8 @@ _MAX_HEADING_LEN = 40
 _FALLBACK_SEGMENT_SIZE = 4000
 _FALLBACK_MIN_SIZE = 1500
 _FALLBACK_TITLE_MAX_LEN = 72
+_DENSE_RUN_MAX_MEDIAN_TOKENS = 120
+_DUPLICATE_RUN_MIN_RATIO = 4
 
 _BOILERPLATE_TITLE_LINES = {
     "contents",
@@ -35,6 +40,18 @@ _BOILERPLATE_TITLE_LINES = {
     "copyright",
     "all rights reserved",
 }
+
+
+@lru_cache(maxsize=1)
+def _token_encoding():
+    return tiktoken.get_encoding("o200k_base")
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens with OpenAI's standard tokenizer."""
+    if not text:
+        return 0
+    return len(_token_encoding().encode(text))
 
 
 def _is_semantic_heading(line: str) -> bool:
@@ -69,6 +86,82 @@ def _chapter_number_label(line: str) -> Optional[str]:
         return re.sub(r'\s+', '', stripped)
     if re.fullmatch(r'[ivxlcdmIVXLCDM]+', stripped):
         return stripped.upper()
+    return None
+
+
+def _roman_to_int(value: str) -> Optional[int]:
+    value = (value or '').strip().upper()
+    if not value or not re.fullmatch(r'[IVXLCDM]+', value):
+        return None
+    numerals = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+    total = 0
+    prev = 0
+    for ch in reversed(value):
+        current = numerals[ch]
+        if current < prev:
+            total -= current
+        else:
+            total += current
+            prev = current
+    return total if total > 0 else None
+
+
+def _chinese_number_to_int(value: str) -> Optional[int]:
+    value = re.sub(r'\s+', '', value or '')
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    digits = {
+        '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+        '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+    }
+    units = {'十': 10, '百': 100, '千': 1000}
+    if all(ch in digits for ch in value):
+        n = 0
+        for ch in value:
+            n = n * 10 + digits[ch]
+        return n
+    total = 0
+    current = 0
+    seen = False
+    for ch in value:
+        if ch in digits:
+            current = digits[ch]
+            seen = True
+        elif ch in units:
+            total += (current or 1) * units[ch]
+            current = 0
+            seen = True
+        else:
+            return None
+    total += current
+    return total if seen and total > 0 else None
+
+
+def _heading_number_at(lines: List[str], line_no: int) -> Optional[int]:
+    """Return the chapter/order number for a candidate heading when one is explicit."""
+    line = re.sub(r'\s+', ' ', (lines[line_no] if line_no < len(lines) else '').strip())
+    if _is_chapter_marker_line(line):
+        _, number = _next_nonempty_line(lines, line_no + 1)
+        label = _chapter_number_label(number)
+        if label is None:
+            return None
+        return int(label) if label.isdigit() else _roman_to_int(label)
+
+    numeric_value = _numeric_heading_value(line)
+    if numeric_value is not None:
+        return numeric_value
+
+    english = re.match(r'^\s*(?:chapter|part|book)\s+([0-9]+|[ivxlcdm]+)\b', line, re.IGNORECASE)
+    if english:
+        raw = english.group(1)
+        return int(raw) if raw.isdigit() else _roman_to_int(raw)
+
+    chinese = re.match(r'^\s*第\s*([0-9一二三四五六七八九十百千零两〇]+)\s*[章回节卷篇部集]', line)
+    if chinese:
+        return _chinese_number_to_int(chinese.group(1))
+
     return None
 
 
@@ -148,7 +241,7 @@ def _chapter_marker_title(lines: List[str], number_line_no: int) -> str:
     return ' '.join(title_lines)
 
 
-def _looks_like_numbered_chapter_sequence(values: List[int], offsets: List[int], text_len: int) -> bool:
+def _looks_like_numbered_chapter_sequence(values: List[int], offsets: List[int], text: str) -> bool:
     """
     判断纯数字标题是否更像章节编号而不是 PDF 页码。
 
@@ -171,10 +264,81 @@ def _looks_like_numbered_chapter_sequence(values: List[int], offsets: List[int],
     if any(d <= 0 or d > 3 for d in deltas):
         return False
     spans = [
-        (offsets[i + 1] if i + 1 < len(offsets) else text_len) - offsets[i]
+        _count_tokens(text[offsets[i]:offsets[i + 1] if i + 1 < len(offsets) else len(text)])
         for i in range(len(offsets))
     ]
-    return median(spans) >= 40
+    return median(spans) >= 5
+
+
+def _numbered_heading_runs(
+    heading_indices: List[int],
+    lines: List[str],
+    offsets: List[int],
+    text: str,
+) -> List[Dict[str, Any]]:
+    """Group explicit-number heading candidates into monotonic runs."""
+    runs: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+    numbered = []
+    for pos, line_no in enumerate(heading_indices):
+        number = _heading_number_at(lines, line_no)
+        if number is not None:
+            numbered.append((pos, line_no, number))
+
+    for pos, line_no, number in numbered:
+        if current is None or number <= current["numbers"][-1]:
+            current = {"positions": [], "line_numbers": [], "numbers": []}
+            runs.append(current)
+        current["positions"].append(pos)
+        current["line_numbers"].append(line_no)
+        current["numbers"].append(number)
+
+    for run in runs:
+        spans = []
+        for pos in run["positions"]:
+            start = offsets[heading_indices[pos]]
+            end = offsets[heading_indices[pos + 1]] if pos + 1 < len(heading_indices) else len(text)
+            spans.append(_count_tokens(text[start:end]))
+        run["median_tokens"] = median(spans) if spans else 0
+        run["count"] = len(run["positions"])
+        run["first_position"] = run["positions"][0] if run["positions"] else 0
+        run["first_offset"] = offsets[run["line_numbers"][0]] if run["line_numbers"] else 0
+        run["score"] = run["median_tokens"] * min(run["count"], 12)
+    return runs
+
+
+def _select_heading_indices(
+    heading_indices: List[int],
+    lines: List[str],
+    offsets: List[int],
+    text: str,
+) -> List[int]:
+    """
+    Remove dense front-matter heading runs, such as tables of contents, using
+    relative token-span evidence instead of book-specific patterns.
+    """
+    if len(heading_indices) < 4:
+        return heading_indices
+
+    runs = [run for run in _numbered_heading_runs(heading_indices, lines, offsets, text) if run["count"] >= 3]
+    if len(runs) < 2:
+        return heading_indices
+
+    first = runs[0]
+    best = max(runs[1:], key=lambda run: run["score"], default=None)
+    if not best:
+        return heading_indices
+
+    first_dense = first["median_tokens"] <= _DENSE_RUN_MAX_MEDIAN_TOKENS
+    much_larger_later = best["median_tokens"] >= max(
+        first["median_tokens"] * _DUPLICATE_RUN_MIN_RATIO,
+        _DENSE_RUN_MAX_MEDIAN_TOKENS,
+    )
+    if not (first_dense and much_larger_later):
+        return heading_indices
+
+    cutoff = best["first_offset"]
+    return [line_no for line_no in heading_indices if offsets[line_no] >= cutoff]
 
 
 def _heading_title(lines: List[str], line_no: int) -> str:
@@ -227,10 +391,12 @@ def _split_by_headings(text: str) -> List[Dict[str, Any]]:
         numeric_indices = [i for i, _ in numeric_candidates]
         numeric_values = [v for _, v in numeric_candidates if v is not None]
         numeric_offsets = [offsets[i] for i in numeric_indices]
-        if _looks_like_numbered_chapter_sequence(numeric_values, numeric_offsets, len(text)):
+        if _looks_like_numbered_chapter_sequence(numeric_values, numeric_offsets, text):
             heading_indices = numeric_indices
         else:
             heading_indices = semantic_heading_indices
+
+    heading_indices = _select_heading_indices(heading_indices, lines, offsets, text)
 
     # 标题太少，不足以形成章节结构
     if len(heading_indices) < 2:
