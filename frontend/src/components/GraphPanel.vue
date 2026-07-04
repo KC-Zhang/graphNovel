@@ -77,6 +77,16 @@
         <!-- 详情面板 -->
         <div v-if="selectedItem" class="detail-panel">
           <div class="detail-panel-header">
+            <button
+              v-if="navDepth"
+              class="detail-back-btn"
+              @click="$emit('go-back')"
+              :title="$t('reader.back')"
+            >
+              <span class="detail-back-arrow">↩</span>
+              <span>{{ $t('reader.back') }}</span>
+              <span class="detail-back-depth">{{ navDepth }}</span>
+            </button>
             <span class="detail-title">
               {{ selectedItem.type === 'node' ? $t('graph.nodeDetails') : $t('graph.relationship') }}
             </span>
@@ -247,12 +257,13 @@ const props = defineProps({
   extractProgress: { type: Object, default: null },
   seenEdges: { type: Array, default: () => [] },  // 已查看关系 id（节点已读由此派生）
   selectRequest: { type: Object, default: null },  // 外部请求选中 { type, id, nonce }
-  latestReadEpisode: { type: Number, default: 0 }
+  latestReadEpisode: { type: Number, default: 0 },
+  navDepth: { type: Number, default: 0 }  // 阅读导航返回栈深度
 })
 
 const emit = defineEmits([
   'refresh', 'toggle-maximize', 'jump',
-  'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change'
+  'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change', 'go-back'
 ])
 
 const graphContainer = ref(null)
@@ -1142,6 +1153,20 @@ input:checked + .slider:before { transform: translateX(18px); }
   color: #999; line-height: 1; padding: 0; transition: color 0.2s;
 }
 .detail-close:hover { color: #333; }
+.detail-back-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #FF4500; color: #fff; border: none;
+  padding: 5px 8px 5px 9px; border-radius: 16px; cursor: pointer;
+  font-size: 12px; font-weight: 600; margin-right: 10px; flex-shrink: 0;
+  box-shadow: 0 1px 5px rgba(255,69,0,0.3); transition: background 0.15s;
+}
+.detail-back-btn:hover { background: #e63e00; }
+.detail-back-arrow { font-size: 14px; line-height: 1; }
+.detail-back-depth {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: rgba(255,255,255,0.28); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+}
 .detail-content { padding: 16px; overflow-y: auto; flex: 1; scroll-behavior: smooth; }
 
 .node-name { font-size: 16px; font-weight: 600; color: #222; margin-bottom: 4px; }
