@@ -70,6 +70,7 @@ and can't mount a disk.
 | `LLM_API_KEY` | Yes | - | Any OpenAI SDK-compatible provider |
 | `LLM_BASE_URL` | No | `https://api.openai.com/v1` | Set for non-OpenAI providers |
 | `LLM_MODEL_NAME` | No | `gpt-4o-mini` | Called once per chapter during extraction |
+| `OPENROUTER_API_KEY` | No | - | Optional fallback key; failed primary extraction calls retry through OpenRouter DeepSeek V3.2 |
 | `SECRET_KEY` | No | `bookmiro-secret-key` | Set a real value once not running purely on localhost |
 | `FLASK_DEBUG` | No | `True` | Set `false` for any non-local deployment |
 | `FLASK_HOST` / `FLASK_PORT` | No | `0.0.0.0` / `5001` | Only used by `python run.py`; ignored under gunicorn (binds `$PORT` directly) |

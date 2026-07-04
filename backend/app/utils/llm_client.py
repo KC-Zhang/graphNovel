@@ -10,6 +10,9 @@ from openai import OpenAI
 
 from ..config import Config
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_FALLBACK_MODEL = "deepseek/deepseek-v3.2"
+
 
 class LLMClient:
     """LLM客户端"""
@@ -18,11 +21,17 @@ class LLMClient:
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        provider_name: str = "primary",
+        json_mode: bool = True,
+        retry_without_json_mode: bool = False,
     ):
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
+        self.provider_name = provider_name
+        self.json_mode = json_mode
+        self.retry_without_json_mode = retry_without_json_mode
         
         if not self.api_key:
             raise ValueError("LLM_API_KEY 未配置")
@@ -30,6 +39,20 @@ class LLMClient:
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url
+        )
+
+    @classmethod
+    def openrouter_fallback(cls) -> Optional["LLMClient"]:
+        """Create the optional OpenRouter fallback client when configured."""
+        if not Config.OPENROUTER_API_KEY:
+            return None
+        return cls(
+            api_key=Config.OPENROUTER_API_KEY,
+            base_url=OPENROUTER_BASE_URL,
+            model=OPENROUTER_FALLBACK_MODEL,
+            provider_name="openrouter",
+            json_mode=True,
+            retry_without_json_mode=True,
         )
     
     def chat(
@@ -84,12 +107,28 @@ class LLMClient:
         Returns:
             解析后的JSON对象
         """
-        response = self.chat(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"}
-        )
+        try:
+            response = self.chat(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"} if self.json_mode else None,
+            )
+        except Exception as e:
+            msg = str(e).lower()
+            can_retry_without_json_mode = (
+                self.json_mode
+                and self.retry_without_json_mode
+                and any(term in msg for term in ("response_format", "json", "schema", "unsupported"))
+            )
+            if not can_retry_without_json_mode:
+                raise
+            response = self.chat(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=None,
+            )
         # 清理markdown代码块标记
         cleaned_response = response.strip()
         cleaned_response = re.sub(r'^```(?:json)?\s*\n?', '', cleaned_response, flags=re.IGNORECASE)
@@ -100,4 +139,3 @@ class LLMClient:
             return json.loads(cleaned_response)
         except json.JSONDecodeError:
             raise ValueError(f"LLM返回的JSON格式无效: {cleaned_response}")
-

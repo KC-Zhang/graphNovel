@@ -35,7 +35,7 @@ def test_long_episode_is_extracted_in_small_section_sized_chunks():
         "Alice met Bob at the station. Clara watched from the balcony while "
         "Daniel carried the old map across town.\n\n"
     )
-    text = paragraph * 90
+    text = paragraph * 180
 
     extractor.extract_episode({"index": 4, "text": text}, "English")
     graph = extractor.to_graph()
@@ -60,3 +60,18 @@ def test_fully_failed_episode_reports_error_and_logs_it(caplog):
         record.levelname == "ERROR" and "章节 7 抽取完全失败" in record.message
         for record in caplog.records
     )
+
+
+def test_failed_primary_llm_uses_fallback_client():
+    primary = FailingLLM()
+    fallback = RecordingLLM()
+    extractor = GraphExtractor(llm_client=primary, fallback_llm_client=fallback)
+
+    result = extractor.extract_episode({"index": 3, "text": "Alice meets Bob."}, "English")
+    graph = extractor.to_graph()
+
+    assert result["total_chunks"] == 1
+    assert result["failed_chunks"] == 0
+    assert result["error"] is None
+    assert len(fallback.excerpts) == 1
+    assert graph["node_count"] == 1

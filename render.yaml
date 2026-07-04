@@ -32,6 +32,8 @@ services:
         sync: false
       - key: LLM_MODEL_NAME
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
 
   - type: web
     name: bookmiro-frontend

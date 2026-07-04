@@ -68,6 +68,7 @@ docker compose up -d
 | `LLM_API_KEY` | 是 | - | 任意兼容 OpenAI SDK 的服务商 |
 | `LLM_BASE_URL` | 否 | `https://api.openai.com/v1` | 使用非 OpenAI 服务商时设置 |
 | `LLM_MODEL_NAME` | 否 | `gpt-4o-mini` | 抽取时每章调用一次 |
+| `OPENROUTER_API_KEY` | 否 | - | 可选 fallback key；主 LLM 抽取失败后会通过 OpenRouter DeepSeek V3.2 重试 |
 | `SECRET_KEY` | 否 | `bookmiro-secret-key` | 一旦不再仅在 localhost 运行，设置真实值 |
 | `FLASK_DEBUG` | 否 | `True` | 任何非本地部署设为 `false` |
 | `FLASK_HOST` / `FLASK_PORT` | 否 | `0.0.0.0` / `5001` | 仅 `python run.py` 启动时生效；gunicorn 下忽略（直接绑定 `$PORT`） |

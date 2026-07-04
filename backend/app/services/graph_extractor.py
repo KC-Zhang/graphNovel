@@ -85,8 +85,17 @@ Return ONLY valid JSON with this exact shape:
 class GraphExtractor:
     """逐章抽取实体与关系，构建知识图谱"""
 
-    def __init__(self, llm_client: Optional[LLMClient] = None):
+    def __init__(
+        self,
+        llm_client: Optional[LLMClient] = None,
+        fallback_llm_client: Optional[LLMClient] = None,
+    ):
         self.llm_client = llm_client or LLMClient()
+        self.fallback_llm_client = fallback_llm_client
+        if self.fallback_llm_client is None and llm_client is None:
+            fallback_factory = getattr(LLMClient, "openrouter_fallback", None)
+            if callable(fallback_factory):
+                self.fallback_llm_client = fallback_factory()
         # 规范名 -> node dict
         self._nodes: Dict[str, Dict[str, Any]] = {}
         # 别名/名称（小写规范化）-> 规范名
@@ -244,6 +253,38 @@ class GraphExtractor:
             items.append(label)
         return "; ".join(items)
 
+    def _chat_json_with_fallback(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        episode_index: int,
+    ) -> Dict[str, Any]:
+        try:
+            return self.llm_client.chat_json(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception as primary_error:
+            if not self.fallback_llm_client:
+                raise
+            logger.warning(
+                "章节 %s 主 LLM 抽取失败，改用 OpenRouter fallback 重试: %s",
+                episode_index,
+                primary_error,
+            )
+            try:
+                return self.fallback_llm_client.chat_json(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as fallback_error:
+                raise RuntimeError(
+                    f"{primary_error}; OpenRouter fallback failed: {fallback_error}"
+                ) from fallback_error
+
     def _extract_from_chunk(self, chunk: str, language: str, episode_index: int) -> Optional[str]:
         """抽取单个文本片段。返回 None 表示成功，否则返回错误信息。"""
         system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(language=language)
@@ -258,7 +299,12 @@ class GraphExtractor:
         ]
 
         try:
-            result = self.llm_client.chat_json(messages=messages, temperature=0.2, max_tokens=4096)
+            result = self._chat_json_with_fallback(
+                messages=messages,
+                temperature=0.2,
+                max_tokens=4096,
+                episode_index=episode_index,
+            )
         except Exception as e:
             logger.warning(f"章节 {episode_index} 抽取失败（已跳过该片段）: {e}")
             return str(e)
