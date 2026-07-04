@@ -474,43 +474,18 @@ const episodeLinks = computed(() => {
   return links
 })
 
-// CJK 脚本字符（中日韩），用于选择 PDF 硬换行合并时的连接符
-const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/
-const isCjkText = (text) => {
-  if (!text) return false
-  let cjk = 0, letters = 0
-  for (const ch of text.slice(0, 2000)) {
-    if (CJK_RE.test(ch)) cjk++
-    else if (/[A-Za-z\u00c0-\u024f\u0400-\u04ff]/.test(ch)) letters++
-  }
-  return cjk > letters
-}
-// 合并 PDF 硬换行时，同段内相邻视觉行之间的连接符：
-// 拉丁语系用空格（与被替换的 \n 同为 1 字符宽，不影响偏移量），CJK 用空串。
-const paragraphJoiner = computed(() => {
-  const lang = (language.value || '').toLowerCase()
-  if (/chinese|japanese|korean/.test(lang)) return ''
-  if (/english|russian|french|german|spanish|italian|portuguese/.test(lang)) return ' '
-  return isCjkText(currentText.value) ? '' : ' '
-})
-
 // 按段落渲染，叠加：跳转高亮(mark) + 反向链接(link)
-// PDF 每个视觉行是一个 \n；这里把空行之间的相邻非空行合并为一个段落，提升可读性。
-// 逐行偏移量计算保持不变，因此链接/高亮的字符坐标不受影响。
 const renderedParagraphs = computed(() => {
   const text = currentText.value || ''
   const range = highlightRange.value
   const links = episodeLinks.value
-  const joiner = paragraphJoiner.value
   const paras = []
   let offset = 0
-  let current = null
-  const flush = () => { if (current && current.length) paras.push(current); current = null }
   for (const line of text.split('\n')) {
     const pStart = offset
     const pEnd = offset + line.length
     offset = pEnd + 1 // 计入换行符
-    if (line.trim().length === 0) { flush(); continue }
+    if (line.trim().length === 0) continue
     const len = line.length
 
     // 本段内的链接区间（转为局部坐标）
@@ -526,36 +501,29 @@ const renderedParagraphs = computed(() => {
       he = Math.min(range.end, pEnd) - pStart
     }
 
-    let lineSegs
     if (local.length === 0 && hs < 0) {
-      lineSegs = [{ text: line, mark: false, link: null }]
-    } else {
-      // 生成切分边界
-      const bounds = new Set([0, len])
-      local.forEach(l => { bounds.add(l.s); bounds.add(l.e) })
-      if (hs >= 0) { bounds.add(hs); bounds.add(he) }
-      const pts = [...bounds].filter(p => p >= 0 && p <= len).sort((a, b) => a - b)
-
-      lineSegs = []
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = pts[i], b = pts[i + 1]
-        if (b <= a) continue
-        const txt = line.slice(a, b)
-        if (!txt) continue
-        const mark = hs >= 0 && a >= hs && b <= he
-        const cover = local.find(l => l.s <= a && l.e >= b)
-        lineSegs.push({ text: txt, mark, link: cover ? cover.link : null })
-      }
+      paras.push([{ text: line, mark: false, link: null }])
+      continue
     }
 
-    if (!current) {
-      current = lineSegs
-    } else {
-      if (joiner) current.push({ text: joiner, mark: false, link: null })
-      current.push(...lineSegs)
+    // 生成切分边界
+    const bounds = new Set([0, len])
+    local.forEach(l => { bounds.add(l.s); bounds.add(l.e) })
+    if (hs >= 0) { bounds.add(hs); bounds.add(he) }
+    const pts = [...bounds].filter(p => p >= 0 && p <= len).sort((a, b) => a - b)
+
+    const segs = []
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1]
+      if (b <= a) continue
+      const txt = line.slice(a, b)
+      if (!txt) continue
+      const mark = hs >= 0 && a >= hs && b <= he
+      const cover = local.find(l => l.s <= a && l.e >= b)
+      segs.push({ text: txt, mark, link: cover ? cover.link : null })
     }
+    paras.push(segs)
   }
-  flush()
   return paras
 })
 
