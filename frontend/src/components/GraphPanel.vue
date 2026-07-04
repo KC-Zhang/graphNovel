@@ -1023,28 +1023,30 @@ onUnmounted(() => {
 .reveal-bar {
   position: absolute; top: 52px; left: 20px; z-index: 12;
   max-width: calc(100% - 40px);
-  background: #F7F0FA; border: 1px solid #E2D2EC; border-radius: 10px;
-  padding: 8px 12px; box-shadow: 0 4px 14px rgba(123,45,142,0.12);
+  background: #fdfcff; border: 1px solid #f0e8f5; border-radius: 12px;
+  padding: 12px 16px; box-shadow: 0 6px 20px rgba(123,45,142,0.15);
 }
-.reveal-bar-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.reveal-bar-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .reveal-bar-label {
-  font-size: 12px; font-weight: 700; color: #7B2D8E; white-space: nowrap;
+  font-size: 13px; font-weight: 700; color: #4a1957; white-space: nowrap;
   max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 }
-.reveal-bar-controls { display: flex; align-items: center; gap: 8px; }
-.reveal-bar-caption { font-size: 11px; color: #9B7BA8; margin-top: 4px; }
-.reveal-slider { width: 150px; accent-color: #7B2D8E; cursor: pointer; }
+.reveal-bar-controls { display: flex; align-items: center; gap: 10px; }
+.reveal-bar-caption { font-size: 12px; color: #8e6c9c; margin-top: 8px; font-weight: 500; }
+.reveal-slider { width: 180px; accent-color: #7B2D8E; cursor: pointer; }
 .reveal-step {
-  width: 28px; height: 28px; border: 1px solid #E0E0E0; border-radius: 6px;
-  background: #FFF; color: #555; cursor: pointer; font-size: 16px; line-height: 1;
+  width: 30px; height: 30px; border: 1px solid #E6D9EE; border-radius: 8px;
+  background: #FFF; color: #7B2D8E; cursor: pointer; font-size: 18px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s ease;
 }
-.reveal-step:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
+.reveal-step:hover { background: #7B2D8E; border-color: #7B2D8E; color: #fff; transform: translateY(-1px); box-shadow: 0 2px 6px rgba(123,45,142,0.2); }
 .reveal-action {
-  height: 28px; padding: 0 10px; border: 1px solid #E0E0E0; border-radius: 6px;
-  background: #FAFAFA; color: #444; cursor: pointer; font-size: 12px; font-weight: 600;
-  white-space: nowrap;
+  height: 30px; padding: 0 14px; border: 1px solid #E6D9EE; border-radius: 8px;
+  background: #faf8fc; color: #6a2578; cursor: pointer; font-size: 13px; font-weight: 600;
+  white-space: nowrap; transition: all 0.15s ease;
 }
-.reveal-action:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
+.reveal-action:hover { background: #7B2D8E; border-color: #7B2D8E; color: #fff; transform: translateY(-1px); box-shadow: 0 2px 6px rgba(123,45,142,0.2); }
 
 .graph-container { width: 100%; height: 100%; }
 .graph-view, .graph-svg { width: 100%; height: 100%; display: block; }
@@ -1154,18 +1156,22 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 .detail-close:hover { color: #333; }
 .detail-back-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  background: #FF4500; color: #fff; border: none;
-  padding: 5px 8px 5px 9px; border-radius: 16px; cursor: pointer;
-  font-size: 12px; font-weight: 600; margin-right: 10px; flex-shrink: 0;
-  box-shadow: 0 1px 5px rgba(255,69,0,0.3); transition: background 0.15s;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #fff; color: #555; border: 1px solid #ddd;
+  padding: 6px 14px; border-radius: 20px; cursor: pointer;
+  font-size: 13px; font-weight: 600; margin-right: 12px; flex-shrink: 0;
+  transition: all 0.15s ease; box-shadow: 0 1px 4px rgba(0,0,0,0.05);
 }
-.detail-back-btn:hover { background: #e63e00; }
-.detail-back-arrow { font-size: 14px; line-height: 1; }
+.detail-back-btn:hover { 
+  background: #f8f8f8; color: #111; border-color: #bbb;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08); transform: translateY(-1px);
+}
+.detail-back-btn:active { transform: translateY(0); }
+.detail-back-arrow { font-size: 16px; line-height: 1; opacity: 0.8; }
 .detail-back-depth {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  background: rgba(255,255,255,0.28); color: #fff;
-  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: #f0f0f0; color: #555; border: 1px solid #e0e0e0;
+  font-size: 11px; font-weight: 700; line-height: 16px; text-align: center;
 }
 .detail-content { padding: 16px; overflow-y: auto; flex: 1; scroll-behavior: smooth; }
 
