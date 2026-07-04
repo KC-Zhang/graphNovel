@@ -3,41 +3,6 @@
     <div class="panel-header">
       <span class="panel-title">{{ $t('graph.panelTitle') }}</span>
       <div class="header-tools">
-        <div class="reveal-control" ref="revealControl">
-          <button
-            class="tool-btn reveal-tool"
-            :class="{ active: revealMenuOpen }"
-            :disabled="!episodeCount"
-            @click.stop="revealMenuOpen = !revealMenuOpen"
-            :title="$t('graph.revealTitle')"
-          >
-            <span>◫</span>
-            <span class="btn-text">{{ $t('graph.revealButton', { current: revealDisplay, total: episodeCount }) }}</span>
-          </button>
-          <div v-if="revealMenuOpen" class="reveal-popover" @click.stop>
-            <div class="reveal-popover-title">{{ $t('graph.revealTitle') }}</div>
-            <div class="reveal-popover-value">
-              {{ $t('graph.revealUpTo', { n: revealDisplay, title: revealEpisodeTitle }) }}
-            </div>
-            <div class="reveal-slider-row">
-              <button class="reveal-step" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
-              <input
-                class="reveal-slider"
-                type="range"
-                min="1"
-                :max="Math.max(episodeCount, 1)"
-                :value="revealDisplay"
-                :disabled="!episodeCount"
-                @input="setRevealFromInput"
-              />
-              <button class="reveal-step" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
-            </div>
-            <div class="reveal-actions">
-              <button class="reveal-action" @click="setRevealToCurrent">{{ $t('graph.revealCurrent') }}</button>
-              <button class="reveal-action" @click="setRevealToLatest">{{ $t('graph.revealLatest') }}</button>
-            </div>
-          </div>
-        </div>
         <button class="tool-btn" @click="$emit('refresh')" :disabled="loading" :title="$t('graph.refreshGraph')">
           <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
           <span class="btn-text">{{ $t('graph.refreshGraph') }}</span>
@@ -64,6 +29,31 @@
           <span class="icon-maximize">⛶</span>
         </button>
       </div>
+    </div>
+
+    <!-- 剧透揭示条：始终可见，控制图谱展开到第几章（与图谱加载进度无关） -->
+    <div v-if="episodeCount" class="reveal-bar">
+      <div class="reveal-bar-row">
+        <span class="reveal-bar-label" :title="revealEpisodeTitle">
+          {{ $t('graph.revealBarLabel', { current: revealDisplay, total: episodeCount }) }}
+        </span>
+        <div class="reveal-bar-controls">
+          <button class="reveal-step" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
+          <input
+            class="reveal-slider"
+            type="range"
+            min="1"
+            :max="Math.max(episodeCount, 1)"
+            :value="revealDisplay"
+            :disabled="!episodeCount"
+            @input="setRevealFromInput"
+          />
+          <button class="reveal-step" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
+          <button class="reveal-action" @click="setRevealToCurrent">{{ $t('graph.revealCurrent') }}</button>
+          <button class="reveal-action" @click="setRevealToLatest">{{ $t('graph.revealLatest') }}</button>
+        </div>
+      </div>
+      <div class="reveal-bar-caption">{{ $t('graph.revealBarCaption') }}</div>
     </div>
 
     <div class="graph-container" ref="graphContainer">
@@ -262,12 +252,11 @@ const props = defineProps({
 
 const emit = defineEmits([
   'refresh', 'toggle-maximize', 'jump',
-  'seen-edge', 'set-edge-seen', 'set-reveal-max'
+  'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change'
 ])
 
 const graphContainer = ref(null)
 const graphSvg = ref(null)
-const revealControl = ref(null)
 const reelList = ref(null)
 const detailContent = ref(null)
 const selectedItem = ref(null)
@@ -275,7 +264,6 @@ const showEdgeLabels = ref(true)
 const edgeLabelsUserOverrode = ref(false)
 const activeReelIndex = ref(0)
 const focusUnread = ref(false)
-const revealMenuOpen = ref(false)
 // 只显示当前章节的图谱（关系/实体过多时更快）；关闭时为累计视图
 const chapterOnly = ref(false)
 // 实体类型图例：可收起，点击某类型高亮该类全部实体
@@ -321,11 +309,17 @@ const setRevealToLatest = () => {
   emitRevealMax(props.latestReadEpisode ?? 0)
 }
 
-const onDocumentMouseDown = (e) => {
-  if (!revealMenuOpen.value) return
-  if (revealControl.value && revealControl.value.contains(e.target)) return
-  revealMenuOpen.value = false
-}
+// 向阅读面板同步当前选中项，供其导航历史快照/恢复使用
+watch(() => selectedItem.value, (sel) => {
+  if (!sel) {
+    emit('select-change', null)
+  } else {
+    emit('select-change', {
+      type: sel.type,
+      id: sel.type === 'node' ? sel.node.id : sel.edge.id,
+    })
+  }
+})
 
 // ---------- 可见子图（按阅读进度过滤） ----------
 const mentionedIn = (item, ep) => (item.mentions || []).some(m => m.episode === ep)
@@ -659,7 +653,8 @@ const centerOnEdge = (edge) => {
 
 // 外部（阅读面板反向链接）请求选中并居中某节点/关系
 watch(() => props.selectRequest, (req) => {
-  if (!req || !req.id) return
+  if (!req) return
+  if (!req.type || !req.id) { closeDetailPanel(); return }
   if (req.type === 'node') {
     const n = visibleNodes.value.find(x => x.id === req.id)
     if (n) { selectNode(n); nextTick(() => centerOnNode(n.id)) }
@@ -963,14 +958,12 @@ const handleResize = () => nextTick(renderGraph)
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', onKey)
-  document.addEventListener('mousedown', onDocumentMouseDown)
   nextTick(renderGraph)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', onKey)
-  document.removeEventListener('mousedown', onDocumentMouseDown)
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
   if (simulation) simulation.stop()
 })
@@ -1015,33 +1008,30 @@ onUnmounted(() => {
 .icon-refresh.spinning { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-.reveal-control { position: relative; }
-.reveal-tool { min-width: 112px; }
-.reveal-popover {
-  position: absolute; top: calc(100% + 8px); right: 0;
-  width: 280px; padding: 12px;
-  background: #FFF; border: 1px solid #E0E0E0; border-radius: 8px;
-  box-shadow: 0 10px 28px rgba(0,0,0,0.12); color: #222; z-index: 40;
+/* 剧透揭示条：始终可见的紫色控制条，位于面板标题下方 */
+.reveal-bar {
+  position: absolute; top: 52px; left: 20px; z-index: 12;
+  max-width: calc(100% - 40px);
+  background: #F7F0FA; border: 1px solid #E2D2EC; border-radius: 10px;
+  padding: 8px 12px; box-shadow: 0 4px 14px rgba(123,45,142,0.12);
 }
-.reveal-popover-title {
-  font-size: 12px; font-weight: 700; color: #7B2D8E;
-  text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px;
+.reveal-bar-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.reveal-bar-label {
+  font-size: 12px; font-weight: 700; color: #7B2D8E; white-space: nowrap;
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 }
-.reveal-popover-value {
-  font-size: 12px; color: #555; line-height: 1.45; margin-bottom: 10px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.reveal-slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.reveal-slider { flex: 1; accent-color: #7B2D8E; cursor: pointer; }
+.reveal-bar-controls { display: flex; align-items: center; gap: 8px; }
+.reveal-bar-caption { font-size: 11px; color: #9B7BA8; margin-top: 4px; }
+.reveal-slider { width: 150px; accent-color: #7B2D8E; cursor: pointer; }
 .reveal-step {
   width: 28px; height: 28px; border: 1px solid #E0E0E0; border-radius: 6px;
   background: #FFF; color: #555; cursor: pointer; font-size: 16px; line-height: 1;
 }
 .reveal-step:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
-.reveal-actions { display: flex; gap: 8px; }
 .reveal-action {
-  flex: 1; height: 28px; border: 1px solid #E0E0E0; border-radius: 6px;
+  height: 28px; padding: 0 10px; border: 1px solid #E0E0E0; border-radius: 6px;
   background: #FAFAFA; color: #444; cursor: pointer; font-size: 12px; font-weight: 600;
+  white-space: nowrap;
 }
 .reveal-action:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
 

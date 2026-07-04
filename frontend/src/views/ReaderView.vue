@@ -55,6 +55,14 @@
             </button>
           </div>
         </div>
+        <button
+          v-if="phase === 'ready'"
+          class="back-nav-btn"
+          :disabled="!navHistory.length"
+          @click="goBack"
+        >
+          ↩ {{ $t('reader.back') }}
+        </button>
         <button v-if="phase === 'ready'" class="chapters-btn" @click="showChapters = !showChapters">
           ☰ {{ $t('reader.chapters') }}
         </button>
@@ -188,29 +196,20 @@
         <!-- 章节导航 -->
         <div class="episode-nav">
           <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode">‹ {{ $t('reader.prev') }}</button>
-          <div class="scrubber-wrap">
-            <div class="scrubber-track">
-              <div
-                v-for="(pct, i) in chapterProgress"
-                :key="i"
-                class="scrubber-seg"
-                :class="chapterState(i)"
-                :style="{ opacity: chapterState(i) === 'partial' ? (0.25 + pct * 0.75) : undefined }"
-              ></div>
-            </div>
-            <input
-              class="episode-scrubber"
-              type="range"
-              min="0"
-              :max="Math.max(episodes.length - 1, 0)"
-              :value="viewEpisode"
-              @input="onScrub"
-            />
+          <div class="chapter-chips" ref="chapterChips">
+            <button
+              v-for="(ep, i) in episodes"
+              :key="i"
+              class="chapter-chip"
+              :class="{ current: i === viewEpisode }"
+              :title="ep.title"
+              @click="jumpToChapter(i)"
+            >{{ i + 1 }}</button>
           </div>
           <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode">{{ $t('reader.next') }} ›</button>
         </div>
         <div class="reveal-note">
-          {{ $t('reader.revealNote', { n: revealMax + 1 }) }} · {{ $t('reader.chaptersRead', { read: readCount, total: episodes.length }) }}
+          {{ $t('reader.chaptersRead', { read: readCount, total: episodes.length }) }}
         </div>
       </div>
 
@@ -235,6 +234,7 @@
           @seen-edge="id => markEdgeSeen(id, true)"
           @set-edge-seen="({ id, value }) => markEdgeSeen(id, value)"
           @set-reveal-max="setRevealMax"
+          @select-change="onGraphSelectChange"
         />
       </div>
     </div>
@@ -262,7 +262,6 @@ import {
   searchGraphData,
 } from '../utils/readerSearch'
 
-const PREFETCH = 2
 const SEARCH_DEBOUNCE_MS = 220
 const SEARCH_BODY_CONCURRENCY = 4
 const MAX_SEARCH_RESULTS = 300
@@ -344,7 +343,34 @@ const startResize = (e) => {
 
 // 反向链接：请求图谱选中并居中某节点/关系
 const selectRequest = ref(null)
+// 图谱当前选中项（由 GraphPanel 通过 select-change 同步，用于导航历史快照）
+const currentGraphSelection = ref(null)
+const onGraphSelectChange = (sel) => {
+  currentGraphSelection.value = sel ? { type: sel.type, id: sel.id } : null
+}
+
+// 导航历史栈：跳转前记录当前状态，供“返回”按钮恢复
+const NAV_HISTORY_MAX = 50
+const navHistory = ref([])
+let isRestoring = false
+const chapterChips = ref(null)
+const snapshotNavState = () => {
+  const el = document.querySelector('.book-text')
+  return {
+    viewEpisode: viewEpisode.value,
+    scrollTop: el ? el.scrollTop : 0,
+    highlightQuote: highlightQuote.value,
+    selection: currentGraphSelection.value ? { ...currentGraphSelection.value } : null,
+  }
+}
+const pushNavSnapshot = () => {
+  if (isRestoring) return
+  navHistory.value.push(snapshotNavState())
+  if (navHistory.value.length > NAV_HISTORY_MAX) navHistory.value.shift()
+}
+
 const goToGraph = (link) => {
+  pushNavSnapshot()
   selectRequest.value = { type: link.type, id: link.id, nonce: Date.now() }
 }
 const linkTitle = (link) => `${t('reader.viewInGraph')}: ${link.name}`
@@ -396,10 +422,11 @@ const extractRunning = ref(false)
 const extractError = ref('')
 // 正在读的章节图谱还没抽到时，显示"构建中"
 const graphLoading = computed(() => revealMax.value > extractedUpto.value)
+// 上传后即在后台抽取整本书（与阅读位置解耦）；揭示仍由 revealMax 单独控制
 const desiredExtractUpto = computed(() => {
   const total = episodes.value.length
   if (!total) return -1
-  return Math.min(total - 1, Math.max(viewEpisode.value + PREFETCH, revealMax.value))
+  return Math.min(total - 1, Math.max(total - 1, revealMax.value))
 })
 const extractProgress = computed(() => {
   const total = episodes.value.length
@@ -447,18 +474,43 @@ const episodeLinks = computed(() => {
   return links
 })
 
+// CJK 脚本字符（中日韩），用于选择 PDF 硬换行合并时的连接符
+const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/
+const isCjkText = (text) => {
+  if (!text) return false
+  let cjk = 0, letters = 0
+  for (const ch of text.slice(0, 2000)) {
+    if (CJK_RE.test(ch)) cjk++
+    else if (/[A-Za-z\u00c0-\u024f\u0400-\u04ff]/.test(ch)) letters++
+  }
+  return cjk > letters
+}
+// 合并 PDF 硬换行时，同段内相邻视觉行之间的连接符：
+// 拉丁语系用空格（与被替换的 \n 同为 1 字符宽，不影响偏移量），CJK 用空串。
+const paragraphJoiner = computed(() => {
+  const lang = (language.value || '').toLowerCase()
+  if (/chinese|japanese|korean/.test(lang)) return ''
+  if (/english|russian|french|german|spanish|italian|portuguese/.test(lang)) return ' '
+  return isCjkText(currentText.value) ? '' : ' '
+})
+
 // 按段落渲染，叠加：跳转高亮(mark) + 反向链接(link)
+// PDF 每个视觉行是一个 \n；这里把空行之间的相邻非空行合并为一个段落，提升可读性。
+// 逐行偏移量计算保持不变，因此链接/高亮的字符坐标不受影响。
 const renderedParagraphs = computed(() => {
   const text = currentText.value || ''
   const range = highlightRange.value
   const links = episodeLinks.value
+  const joiner = paragraphJoiner.value
   const paras = []
   let offset = 0
+  let current = null
+  const flush = () => { if (current && current.length) paras.push(current); current = null }
   for (const line of text.split('\n')) {
     const pStart = offset
     const pEnd = offset + line.length
     offset = pEnd + 1 // 计入换行符
-    if (line.trim().length === 0) continue
+    if (line.trim().length === 0) { flush(); continue }
     const len = line.length
 
     // 本段内的链接区间（转为局部坐标）
@@ -474,29 +526,36 @@ const renderedParagraphs = computed(() => {
       he = Math.min(range.end, pEnd) - pStart
     }
 
+    let lineSegs
     if (local.length === 0 && hs < 0) {
-      paras.push([{ text: line, mark: false, link: null }])
-      continue
+      lineSegs = [{ text: line, mark: false, link: null }]
+    } else {
+      // 生成切分边界
+      const bounds = new Set([0, len])
+      local.forEach(l => { bounds.add(l.s); bounds.add(l.e) })
+      if (hs >= 0) { bounds.add(hs); bounds.add(he) }
+      const pts = [...bounds].filter(p => p >= 0 && p <= len).sort((a, b) => a - b)
+
+      lineSegs = []
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1]
+        if (b <= a) continue
+        const txt = line.slice(a, b)
+        if (!txt) continue
+        const mark = hs >= 0 && a >= hs && b <= he
+        const cover = local.find(l => l.s <= a && l.e >= b)
+        lineSegs.push({ text: txt, mark, link: cover ? cover.link : null })
+      }
     }
 
-    // 生成切分边界
-    const bounds = new Set([0, len])
-    local.forEach(l => { bounds.add(l.s); bounds.add(l.e) })
-    if (hs >= 0) { bounds.add(hs); bounds.add(he) }
-    const pts = [...bounds].filter(p => p >= 0 && p <= len).sort((a, b) => a - b)
-
-    const segs = []
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1]
-      if (b <= a) continue
-      const txt = line.slice(a, b)
-      if (!txt) continue
-      const mark = hs >= 0 && a >= hs && b <= he
-      const cover = local.find(l => l.s <= a && l.e >= b)
-      segs.push({ text: txt, mark, link: cover ? cover.link : null })
+    if (!current) {
+      current = lineSegs
+    } else {
+      if (joiner) current.push({ text: joiner, mark: false, link: null })
+      current.push(...lineSegs)
     }
-    paras.push(segs)
   }
+  flush()
   return paras
 })
 
@@ -536,6 +595,8 @@ const confirmChapterReview = async () => {
   }
   phase.value = 'ready'
   await setViewEpisode(0)
+  // 阅读就绪后即在后台抽取整本书的图谱
+  ensureAhead()
 }
 
 // ---------- 章节文本加载 ----------
@@ -731,7 +792,46 @@ const prevEpisode = () => setViewEpisode(viewEpisode.value - 1)
 const nextEpisode = () => {
   setViewEpisode(viewEpisode.value + 1)
 }
-const onScrub = (e) => setViewEpisode(parseInt(e.target.value, 10))
+
+// 章节导航条：当前章节 chip 自动滚入可视范围
+const scrollCurrentChipIntoView = () => {
+  nextTick(() => {
+    const wrap = chapterChips.value
+    if (!wrap) return
+    const chip = wrap.querySelector('.chapter-chip.current')
+    if (!chip) return
+    const target = chip.offsetLeft - wrap.clientWidth / 2 + chip.clientWidth / 2
+    wrap.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
+  })
+}
+watch(viewEpisode, scrollCurrentChipIntoView)
+
+// 返回：弹出上一个快照并恢复章节 / 滚动位置 / 高亮 / 图谱选中；不降低 revealMax
+const goBack = async () => {
+  if (!navHistory.value.length) return
+  const snap = navHistory.value.pop()
+  isRestoring = true
+  try {
+    if (snap.viewEpisode !== viewEpisode.value) {
+      cancelDwell()
+      viewEpisode.value = Math.max(0, Math.min(snap.viewEpisode, episodes.value.length - 1))
+      recordReachedEpisode(viewEpisode.value)
+      await loadEpisodeText(viewEpisode.value)
+    }
+    highlightQuote.value = snap.highlightQuote || ''
+    searchHighlightRange.value = null
+    await nextTick()
+    beginJumpScroll()
+    const el = document.querySelector('.book-text')
+    if (el) el.scrollTop = snap.scrollTop || 0
+    refreshViewportMarker(el)
+    selectRequest.value = snap.selection
+      ? { type: snap.selection.type, id: snap.selection.id, nonce: Date.now() }
+      : { type: null, id: null, nonce: Date.now() }
+  } finally {
+    isRestoring = false
+  }
+}
 
 const searchKindLabel = (kind) => {
   const map = {
@@ -800,6 +900,7 @@ const clearSearch = () => {
 
 const selectSearchResult = async (result, index = searchResults.value.indexOf(result)) => {
   if (!result) return
+  pushNavSnapshot()
   activeSearchIndex.value = index
   searchOpen.value = false
 
@@ -846,6 +947,7 @@ const onSearchDocumentMouseDown = (e) => {
 
 // 从图谱跳转到原文
 const onJump = async ({ episode, quote }) => {
+  pushNavSnapshot()
   if (episode !== viewEpisode.value) {
     const previousEpisode = viewEpisode.value
     viewEpisode.value = Math.max(0, Math.min(episode, episodes.value.length - 1))
@@ -975,6 +1077,8 @@ const initExisting = async () => {
     // 立即进入阅读；回到上次阅读位置
     phase.value = 'ready'
     if (episodes.value.length) await setViewEpisode(viewEpisode.value || 0)
+    // 阅读就绪后即在后台抽取整本书的图谱
+    ensureAhead()
   } catch (e) {
     errorText.value = e.message || 'Failed to load book'
     phase.value = 'error'
@@ -1159,6 +1263,12 @@ onUnmounted(() => {
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
 }
 .chapters-btn:hover { background: rgba(255,255,255,0.1); }
+.back-nav-btn {
+  background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
+  padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.back-nav-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+.back-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* 章节目录抽屉 */
 .chapters-overlay {
@@ -1342,16 +1452,22 @@ onUnmounted(() => {
 }
 .nav-arrow:hover:not(:disabled) { background: #f5f5f5; border-color: #bbb; }
 .nav-arrow:disabled { opacity: 0.4; cursor: not-allowed; }
-.scrubber-wrap { flex: 1; position: relative; display: flex; align-items: center; }
-.scrubber-track {
-  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
-  height: 6px; display: flex; gap: 1px; border-radius: 3px; overflow: hidden;
-  pointer-events: none;
+.chapter-chips {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  overflow-x: auto; scroll-behavior: smooth; padding: 4px 2px;
+  scrollbar-width: none; -ms-overflow-style: none;
 }
-.scrubber-seg { flex: 1 1 0; min-width: 0; background: #e6e6e6; }
-.scrubber-seg.partial { background: #FFB74D; }
-.scrubber-seg.read { background: #FF4500; opacity: 1; }
-.episode-scrubber { position: relative; flex: 1; background: transparent; accent-color: #FF4500; cursor: pointer; }
+.chapter-chips::-webkit-scrollbar { height: 0; }
+.chapter-chip {
+  flex: 0 0 auto; min-width: 30px; height: 28px; padding: 0 8px;
+  border: 1px solid #ddd; background: #fff; color: #555; border-radius: 6px;
+  cursor: pointer; font-size: 12px; font-family: monospace; line-height: 1;
+  transition: all 0.15s;
+}
+.chapter-chip:hover { border-color: #bbb; background: #f5f5f5; }
+.chapter-chip.current {
+  background: #FF4500; border-color: #FF4500; color: #fff; font-weight: 700;
+}
 .reveal-note {
   font-size: 11px; color: #aaa; text-align: center; padding: 0 32px 12px; flex-shrink: 0;
 }
