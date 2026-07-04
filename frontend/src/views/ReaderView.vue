@@ -55,9 +55,6 @@
             </button>
           </div>
         </div>
-        <button v-if="phase === 'ready'" class="chapters-btn" @click="showChapters = !showChapters">
-          ☰ {{ $t('reader.chapters') }}
-        </button>
         <LanguageSwitcher />
       </div>
     </nav>
@@ -129,6 +126,7 @@
         <div class="episode-head">
           <div class="episode-title">{{ currentEpisodeTitle }}</div>
           <div class="episode-head-right">
+            <span class="chapters-read-inline">{{ $t('reader.chaptersRead', { read: readCount, total: episodes.length }) }}</span>
             <button
               class="read-toggle"
               :class="{ read: isEpisodeRead(viewEpisode) }"
@@ -187,7 +185,10 @@
 
         <!-- 章节导航 -->
         <div class="episode-nav">
-          <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode">‹ {{ $t('reader.prev') }}</button>
+          <button class="chapters-btn-bottom" @click="showChapters = !showChapters">
+            ☰
+          </button>
+          <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode">‹</button>
           <div class="chapter-chips" ref="chapterChips">
             <button
               v-for="(ep, i) in episodes"
@@ -198,10 +199,7 @@
               @click="jumpToChapter(i)"
             >{{ i + 1 }}</button>
           </div>
-          <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode">{{ $t('reader.next') }} ›</button>
-        </div>
-        <div class="reveal-note">
-          {{ $t('reader.chaptersRead', { read: readCount, total: episodes.length }) }}
+          <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode">›</button>
         </div>
       </div>
 
@@ -1220,11 +1218,6 @@ onUnmounted(() => {
 .search-result-title { font-size: 13px; font-weight: 700; color: #222; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-result-subtitle { font-size: 11px; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-result-snippet { font-size: 12px; color: #555; line-height: 1.45; }
-.chapters-btn {
-  background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
-  padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
-}
-.chapters-btn:hover { background: rgba(255,255,255,0.1); }
 
 /* 章节目录抽屉 */
 .chapters-overlay {
@@ -1333,6 +1326,7 @@ onUnmounted(() => {
 }
 .episode-title { font-size: 20px; font-weight: 700; color: #111; }
 .episode-head-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.chapters-read-inline { font-size: 13px; color: #777; font-weight: 500; }
 .episode-counter { font-size: 12px; color: #999; font-family: monospace; }
 .read-toggle {
   border: 1px solid #ddd; background: #fff; color: #666;
@@ -1399,9 +1393,16 @@ onUnmounted(() => {
 }
 
 .episode-nav {
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 12px;
   padding: 12px 32px; border-top: 1px solid #eee; flex-shrink: 0;
 }
+.chapters-btn-bottom {
+  background: transparent; border: none; color: #555;
+  padding: 6px; font-size: 18px; cursor: pointer; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s; margin-right: 4px;
+}
+.chapters-btn-bottom:hover { background: #eee; color: #111; }
 .nav-arrow {
   background: #fff; border: 1px solid #ddd; border-radius: 6px;
   padding: 8px 14px; cursor: pointer; font-size: 13px; color: #333; white-space: nowrap;
@@ -1423,8 +1424,5 @@ onUnmounted(() => {
 .chapter-chip:hover { border-color: #bbb; background: #f5f5f5; }
 .chapter-chip.current {
   background: #FF4500; border-color: #FF4500; color: #fff; font-weight: 700;
-}
-.reveal-note {
-  font-size: 11px; color: #aaa; text-align: center; padding: 0 32px 12px; flex-shrink: 0;
 }
 </style>
