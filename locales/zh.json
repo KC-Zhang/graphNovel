@@ -355,6 +355,7 @@
     "waitingOntology": "等待图谱...",
     "emptyReveal": "继续阅读以展开图谱",
     "extractError": "实体抽取失败：{error}",
+    "extractRetrying": "正在重试抽取...",
     "toggleMaximize": "最大化/还原",
     "revealBarLabel": "剧情已展开：第 {current} / {total} 章",
     "revealBarCaption": "剧透控制 —— 拖动可展开更多剧情",

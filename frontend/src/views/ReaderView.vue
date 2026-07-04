@@ -442,6 +442,7 @@ let searchNonce = 0
 const extractedUpto = ref(-1)
 const extractRunning = ref(false)
 const extractError = ref('')
+const extractRetrying = ref(false)
 // 正在读的章节图谱还没抽到时，显示"构建中"
 const graphLoading = computed(() => revealMax.value > extractedUpto.value)
 // 上传后即在后台抽取整本书（与阅读位置解耦）；揭示仍由 revealMax 单独控制
@@ -457,7 +458,8 @@ const extractProgress = computed(() => {
     target: total ? Math.min(total, desiredExtractUpto.value + 1) : 0,
     total,
     running: extractRunning.value,
-    error: extractError.value,
+    retrying: extractRetrying.value,
+    error: extractRetrying.value ? '' : extractError.value,
   }
 })
 
@@ -988,7 +990,12 @@ const pollStatus = async () => {
       const s = res.data
       extractedUpto.value = s.extracted_upto
       extractRunning.value = s.running
-      extractError.value = s.error || ''
+      if (extractRetrying.value && s.running) {
+        extractError.value = ''
+      } else {
+        extractRetrying.value = false
+        extractError.value = s.error || ''
+      }
       // 失败章节集合变化（多为重试成功）也意味着图谱数据有更新，需要重新拉取。
       const failedKey = (s.failed_episodes || []).join(',')
       const failedChanged = failedKey !== lastFailedKey
@@ -1016,7 +1023,7 @@ const startPolling = () => {
 }
 
 // 确保抽取推进到"当前阅读位置 + 预取"的章节
-const ensureAhead = async () => {
+const ensureAhead = async ({ suppressRunningError = false, surfaceRequestError = false } = {}) => {
   if (!projectId.value || projectId.value === 'new' || !episodes.value.length) return
   const target = desiredExtractUpto.value
   if (target < 0) return
@@ -1025,17 +1032,28 @@ const ensureAhead = async () => {
     if (res.success) {
       extractedUpto.value = res.data.extracted_upto
       extractRunning.value = res.data.running
-      extractError.value = res.data.error || ''
+      if (suppressRunningError && res.data.running) {
+        extractError.value = ''
+      } else {
+        extractError.value = res.data.error || ''
+      }
+      if (!res.data.running) extractRetrying.value = false
     }
   } catch (e) {
-    // ignore transient errors
+    if (surfaceRequestError) {
+      extractRetrying.value = false
+      extractError.value = e.message || 'Retry failed'
+    }
   }
   startPolling()
 }
 
 const retryExtraction = async () => {
+  if (extractRetrying.value) return
+  extractRetrying.value = true
   extractError.value = ''
-  await ensureAhead()
+  await ensureAhead({ suppressRunningError: true, surfaceRequestError: true })
+  if (!extractRunning.value) extractRetrying.value = false
 }
 
 // ---------- 初始化 ----------

@@ -355,6 +355,7 @@
     "waitingOntology": "Waiting for the graph...",
     "emptyReveal": "Keep reading to reveal the graph",
     "extractError": "Entity extraction failed: {error}",
+    "extractRetrying": "Retrying extraction...",
     "toggleMaximize": "Maximize/Restore",
     "revealBarLabel": "Story revealed: Ch {current} / {total}",
     "revealBarCaption": "Spoiler control — drag to reveal more of the story",

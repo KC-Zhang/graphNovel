@@ -62,13 +62,13 @@
       <div v-if="hasGraph" class="graph-view">
         <svg ref="graphSvg" class="graph-svg"></svg>
 
-        <div v-if="loading" class="graph-building-hint">
+        <div v-if="loading || extractRetrying" class="graph-building-hint">
           <div class="memory-icon-wrapper">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="memory-icon">
               <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-4.04z" />
             </svg>
           </div>
-          <span>{{ $t('graph.realtimeUpdating') }}</span>
+          <span>{{ extractRetrying ? $t('graph.extractRetrying') : $t('graph.realtimeUpdating') }}</span>
           <span v-if="extractProgressText" class="graph-progress-text">{{ extractProgressText }}</span>
         </div>
         <div v-else-if="extractErrorText" class="graph-building-hint graph-error-hint" :title="extractErrorText">
@@ -185,9 +185,9 @@
         </div>
       </div>
 
-      <div v-else-if="loading" class="graph-state">
+      <div v-else-if="loading || extractRetrying" class="graph-state">
         <div class="loading-spinner"></div>
-        <p>{{ $t('graph.graphDataLoading') }}</p>
+        <p>{{ extractRetrying ? $t('graph.extractRetrying') : $t('graph.graphDataLoading') }}</p>
       </div>
 
       <div v-else-if="extractErrorText" class="graph-state">
@@ -383,6 +383,7 @@ const extractProgressText = computed(() => {
   return `${extracted}/${progress.total} · ${target}`
 })
 const extractErrorText = computed(() => props.extractProgress?.error || '')
+const extractRetrying = computed(() => !!props.extractProgress?.retrying)
 
 const nodeById = computed(() => {
   const m = {}
