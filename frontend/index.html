@@ -1,7 +1,27 @@
 <!doctype html>
 <html lang="zh">
   <head>
-    <script>document.documentElement.lang = localStorage.getItem('locale') || 'zh'</script>
+    <script>
+      (() => {
+        const supportedLocales = ['zh', 'en']
+        const normalize = value => String(value || '').trim().toLowerCase().replace('_', '-')
+        const matchLocale = value => {
+          const normalized = normalize(value)
+          if (!normalized) return ''
+          const exact = supportedLocales.find(locale => normalize(locale) === normalized)
+          if (exact) return exact
+          const baseLanguage = normalized.split('-')[0]
+          return supportedLocales.find(locale => normalize(locale) === baseLanguage) || ''
+        }
+        const savedLocale = localStorage.getItem('locale')
+        const browserLocales = Array.isArray(navigator.languages) && navigator.languages.length
+          ? navigator.languages
+          : [navigator.language]
+        document.documentElement.lang = matchLocale(savedLocale)
+          || browserLocales.map(matchLocale).find(Boolean)
+          || 'zh'
+      })()
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@100..800&family=Noto+Sans+SC:wght@300;400;500;700;800;900&family=Space+Grotesk:wght@300..700&display=swap" rel="stylesheet">

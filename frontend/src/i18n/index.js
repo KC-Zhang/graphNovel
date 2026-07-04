@@ -14,12 +14,44 @@ for (const path in localeFiles) {
   }
 }
 
-const savedLocale = localStorage.getItem('locale') || 'zh'
+const fallbackLocale = 'zh'
+
+const normalizeLocale = value => String(value || '').trim().toLowerCase().replace('_', '-')
+
+const matchAvailableLocale = value => {
+  const normalized = normalizeLocale(value)
+  if (!normalized) return ''
+
+  const availableKeys = Object.keys(messages)
+  const exactMatch = availableKeys.find(key => normalizeLocale(key) === normalized)
+  if (exactMatch) return exactMatch
+
+  const baseLanguage = normalized.split('-')[0]
+  return availableKeys.find(key => normalizeLocale(key) === baseLanguage) || ''
+}
+
+const getBrowserLocale = () => {
+  if (typeof navigator === 'undefined') return ''
+
+  const browserLocales = Array.isArray(navigator.languages) && navigator.languages.length
+    ? navigator.languages
+    : [navigator.language]
+
+  return browserLocales.map(matchAvailableLocale).find(Boolean) || ''
+}
+
+const getInitialLocale = () => {
+  const savedLocale = localStorage.getItem('locale')
+  return matchAvailableLocale(savedLocale) || getBrowserLocale() || fallbackLocale
+}
+
+const initialLocale = getInitialLocale()
+document.documentElement.lang = initialLocale
 
 const i18n = createI18n({
   legacy: false,
-  locale: savedLocale,
-  fallbackLocale: 'zh',
+  locale: initialLocale,
+  fallbackLocale,
   messages
 })
 
