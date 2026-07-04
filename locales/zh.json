@@ -101,6 +101,8 @@
     "back": "返回",
     "chapters": "目录",
     "chaptersRead": "已读 {read}/{total}",
+    "chapterPosition": "第 {current} / {total} 章",
+    "chapterSlider": "跳转章节",
     "readPercent": "已读 {pct}%",
     "markRead": "已读",
     "viewInGraph": "在图谱中查看",

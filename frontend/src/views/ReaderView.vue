@@ -198,15 +198,29 @@
           </button>
           <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="jumpToChapter(0)" :title="$t('reader.jumpFirst')">«</button>
           <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode" :title="$t('reader.prev')">‹</button>
-          <div class="chapter-chips" ref="chapterChips">
-            <button
-              v-for="(ep, i) in episodes"
-              :key="i"
-              class="chapter-chip"
-              :class="{ current: i === viewEpisode }"
-              :title="ep.title"
-              @click="jumpToChapter(i)"
-            >{{ i + 1 }}</button>
+          <div class="chapter-scrubber">
+            <div class="chapter-scrubber-meta">
+              <span class="chapter-scrubber-index">
+                {{ $t('reader.chapterPosition', { current: chapterSliderDisplay, total: episodes.length }) }}
+              </span>
+              <span class="chapter-scrubber-title" :title="chapterSliderTitle">
+                {{ chapterSliderTitle }}
+              </span>
+              <span v-if="chapterSliderPercent > 0" class="chapter-scrubber-pct">
+                {{ chapterSliderPercent }}%
+              </span>
+            </div>
+            <input
+              class="chapter-slider"
+              type="range"
+              min="1"
+              :max="Math.max(episodes.length, 1)"
+              :value="chapterSliderValue"
+              :disabled="episodes.length <= 1"
+              :aria-label="$t('reader.chapterSlider')"
+              @input="onChapterSliderInput"
+              @change="commitChapterSlider"
+            />
           </div>
           <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode" :title="$t('reader.next')">›</button>
           <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="jumpToChapter(episodes.length - 1)" :title="$t('reader.jumpLast')">»</button>
@@ -236,6 +250,7 @@
           @set-reveal-max="setRevealMax"
           @select-change="onGraphSelectChange"
           @go-back="goBack"
+          @retry-extraction="retryExtraction"
         />
       </div>
     </div>
@@ -361,7 +376,6 @@ const onGraphSelectChange = (sel) => {
 const NAV_HISTORY_MAX = 50
 const navHistory = ref([])
 let isRestoring = false
-const chapterChips = ref(null)
 const snapshotNavState = () => {
   const el = document.querySelector('.book-text')
   return {
@@ -451,6 +465,23 @@ const currentEpisodeTitle = computed(() => {
   const ep = episodes.value[viewEpisode.value]
   return ep ? ep.title : ''
 })
+
+const chapterSliderValue = ref(1)
+const chapterSliderIndex = computed(() =>
+  clampRevealMax(Number(chapterSliderValue.value) - 1, episodes.value.length)
+)
+const chapterSliderDisplay = computed(() => episodes.value.length ? chapterSliderIndex.value + 1 : 0)
+const chapterSliderTitle = computed(() => episodes.value[chapterSliderIndex.value]?.title || '')
+const chapterSliderPercent = computed(() => chapterPercent(chapterSliderIndex.value))
+const syncChapterSliderToView = () => {
+  chapterSliderValue.value = episodes.value.length ? viewEpisode.value + 1 : 1
+}
+const onChapterSliderInput = (e) => {
+  chapterSliderValue.value = Number(e.target.value) || 1
+}
+const commitChapterSlider = () => {
+  jumpToChapter(chapterSliderIndex.value)
+}
 
 const chapterPreviewItems = computed(() => episodes.value.slice(0, 30))
 
@@ -769,18 +800,8 @@ const nextEpisode = () => {
   setViewEpisode(viewEpisode.value + 1)
 }
 
-// 章节导航条：当前章节 chip 自动滚入可视范围
-const scrollCurrentChipIntoView = () => {
-  nextTick(() => {
-    const wrap = chapterChips.value
-    if (!wrap) return
-    const chip = wrap.querySelector('.chapter-chip.current')
-    if (!chip) return
-    const target = chip.offsetLeft - wrap.clientWidth / 2 + chip.clientWidth / 2
-    wrap.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
-  })
-}
-watch(viewEpisode, scrollCurrentChipIntoView)
+watch(viewEpisode, syncChapterSliderToView)
+watch(() => episodes.value.length, syncChapterSliderToView)
 
 // 返回：弹出上一个快照并恢复章节 / 滚动位置 / 高亮 / 图谱选中；不降低 revealMax
 const goBack = async () => {
@@ -1010,6 +1031,11 @@ const ensureAhead = async () => {
     // ignore transient errors
   }
   startPolling()
+}
+
+const retryExtraction = async () => {
+  extractError.value = ''
+  await ensureAhead()
 }
 
 // ---------- 初始化 ----------
@@ -1417,36 +1443,44 @@ onUnmounted(() => {
 }
 
 .episode-nav {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 32px; border-top: 1px solid #eee; flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 12px; border-top: 1px solid #eee; flex-shrink: 0;
 }
 .chapters-btn-bottom {
   background: transparent; border: none; color: #555;
-  padding: 6px; font-size: 18px; cursor: pointer; border-radius: 6px;
+  width: 30px; height: 30px; padding: 0; font-size: 18px; cursor: pointer; border-radius: 6px;
   display: flex; align-items: center; justify-content: center;
-  transition: background 0.15s, color 0.15s; margin-right: 4px;
+  transition: background 0.15s, color 0.15s; flex-shrink: 0;
 }
 .chapters-btn-bottom:hover { background: #eee; color: #111; }
 .nav-arrow {
   background: #fff; border: 1px solid #ddd; border-radius: 6px;
-  padding: 8px 14px; cursor: pointer; font-size: 13px; color: #333; white-space: nowrap;
+  width: 30px; height: 30px; padding: 0; cursor: pointer; font-size: 13px; color: #333; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .nav-arrow:hover:not(:disabled) { background: #f5f5f5; border-color: #bbb; }
 .nav-arrow:disabled { opacity: 0.4; cursor: not-allowed; }
-.chapter-chips {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-  overflow-x: auto; scroll-behavior: smooth; padding: 4px 2px;
-  scrollbar-width: none; -ms-overflow-style: none;
+.chapter-scrubber {
+  flex: 1 1 84px; min-width: 84px; display: flex; flex-direction: column; gap: 5px;
+  padding: 2px 4px 0;
 }
-.chapter-chips::-webkit-scrollbar { height: 0; }
-.chapter-chip {
-  flex: 0 0 auto; min-width: 30px; height: 28px; padding: 0 8px;
-  border: 1px solid #ddd; background: #fff; color: #555; border-radius: 6px;
-  cursor: pointer; font-size: 12px; font-family: monospace; line-height: 1;
-  transition: all 0.15s;
+.chapter-scrubber-meta {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center; gap: 8px; min-width: 0;
 }
-.chapter-chip:hover { border-color: #bbb; background: #f5f5f5; }
-.chapter-chip.current {
-  background: #FF4500; border-color: #FF4500; color: #fff; font-weight: 700;
+.chapter-scrubber-index {
+  font-size: 11px; font-weight: 700; color: #FF4500; white-space: nowrap;
+  font-family: monospace;
 }
+.chapter-scrubber-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: #333; font-weight: 600;
+}
+.chapter-scrubber-pct {
+  font-size: 11px; color: #FFB74D; font-weight: 700; font-family: monospace; white-space: nowrap;
+}
+.chapter-slider {
+  width: 100%; height: 16px; margin: 0; accent-color: #FF4500; cursor: pointer;
+}
+.chapter-slider:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>

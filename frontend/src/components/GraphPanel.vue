@@ -74,6 +74,9 @@
         <div v-else-if="extractErrorText" class="graph-building-hint graph-error-hint" :title="extractErrorText">
           <span class="error-icon">⚠</span>
           <span>{{ $t('graph.extractError', { error: extractErrorText }) }}</span>
+          <button class="extract-retry-btn" @click="$emit('retry-extraction')">
+            {{ $t('reader.retry') }}
+          </button>
         </div>
 
         <!-- 详情面板 -->
@@ -190,6 +193,9 @@
       <div v-else-if="extractErrorText" class="graph-state">
         <div class="empty-icon error-icon" :title="extractErrorText">⚠</div>
         <p class="empty-text">{{ $t('graph.extractError', { error: extractErrorText }) }}</p>
+        <button class="extract-retry-btn state-retry-btn" @click="$emit('retry-extraction')">
+          {{ $t('reader.retry') }}
+        </button>
       </div>
 
       <div v-else class="graph-state">
@@ -247,7 +253,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'toggle-maximize', 'jump',
-  'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change', 'go-back'
+  'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change', 'go-back', 'retry-extraction'
 ])
 
 const graphContainer = ref(null)
@@ -1187,6 +1193,16 @@ onUnmounted(() => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .graph-error-hint .error-icon { flex-shrink: 0; }
+.extract-retry-btn {
+  height: 26px; padding: 0 10px; border: 1px solid rgba(255,255,255,0.5);
+  border-radius: 6px; background: rgba(255,255,255,0.16); color: #fff;
+  cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; flex-shrink: 0;
+}
+.extract-retry-btn:hover { background: rgba(255,255,255,0.28); border-color: rgba(255,255,255,0.75); }
+.state-retry-btn {
+  margin-top: 12px; background: #1A1A1A; border-color: #1A1A1A; color: #fff;
+}
+.state-retry-btn:hover { background: #FF4500; border-color: #FF4500; }
 .memory-icon-wrapper { display: flex; align-items: center; animation: breathe 2s ease-in-out infinite; }
 .memory-icon { width: 18px; height: 18px; color: #4CAF50; }
 @keyframes breathe {
