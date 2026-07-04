@@ -126,15 +126,23 @@
         <div class="episode-head">
           <div class="episode-title">{{ currentEpisodeTitle }}</div>
           <div class="episode-head-right">
-            <span class="chapters-read-inline">{{ $t('reader.chaptersRead', { read: readCount, total: episodes.length }) }}</span>
             <button
-              class="read-toggle"
-              :class="{ read: isEpisodeRead(viewEpisode) }"
+              class="read-ring"
+              :class="{ done: isEpisodeRead(viewEpisode) }"
               @click="toggleChapterRead"
+              :title="isEpisodeRead(viewEpisode) ? $t('reader.markRead') : $t('reader.readPercent', { pct: currentReadPct })"
             >
-              {{ isEpisodeRead(viewEpisode) ? '✓ ' + $t('reader.markRead') : $t('reader.markRead') }}
+              <svg viewBox="0 0 36 36" class="read-ring-svg">
+                <circle class="read-ring-track" cx="18" cy="18" r="15.5" />
+                <circle
+                  class="read-ring-fill"
+                  cx="18" cy="18" r="15.5"
+                  :stroke-dasharray="RING_CIRC"
+                  :stroke-dashoffset="readRingOffset"
+                />
+              </svg>
+              <span class="read-ring-text">{{ isEpisodeRead(viewEpisode) ? '✓' : currentReadPct }}</span>
             </button>
-            <div class="episode-counter">{{ viewEpisode + 1 }} / {{ episodes.length }}</div>
           </div>
         </div>
 
@@ -188,7 +196,8 @@
           <button class="chapters-btn-bottom" @click="showChapters = !showChapters">
             ☰
           </button>
-          <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode">‹</button>
+          <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="jumpToChapter(0)" :title="$t('reader.jumpFirst')">«</button>
+          <button class="nav-arrow" :disabled="viewEpisode <= 0" @click="prevEpisode" :title="$t('reader.prev')">‹</button>
           <div class="chapter-chips" ref="chapterChips">
             <button
               v-for="(ep, i) in episodes"
@@ -199,7 +208,8 @@
               @click="jumpToChapter(i)"
             >{{ i + 1 }}</button>
           </div>
-          <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode">›</button>
+          <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="nextEpisode" :title="$t('reader.next')">›</button>
+          <button class="nav-arrow" :disabled="viewEpisode >= episodes.length - 1" @click="jumpToChapter(episodes.length - 1)" :title="$t('reader.jumpLast')">»</button>
         </div>
       </div>
 
@@ -219,7 +229,6 @@
           :select-request="selectRequest"
           :latest-read-episode="latestReadEpisode"
           :nav-depth="navHistory.length"
-          @refresh="refreshGraph"
           @toggle-maximize="toggleGraphMaximized"
           @jump="onJump"
           @seen-edge="id => markEdgeSeen(id, true)"
@@ -295,6 +304,13 @@ const chapterState = (i) => {
   return (chapterProgress.value[i] || 0) > 0.001 ? 'partial' : 'unread'
 }
 const chapterPercent = (i) => Math.round((chapterProgress.value[i] || 0) * 100)
+// 当前章节已读进度环
+const RING_CIRC = 2 * Math.PI * 15.5
+const currentReadPct = computed(() => chapterPercent(viewEpisode.value))
+const readRingOffset = computed(() => {
+  const pct = isEpisodeRead(viewEpisode.value) ? 100 : currentReadPct.value
+  return RING_CIRC * (1 - Math.min(100, Math.max(0, pct)) / 100)
+})
 const showChapters = ref(false)
 const graphMaximized = ref(false)
 const latestReachedEpisode = ref(0)
@@ -936,13 +952,6 @@ const loadGraph = async () => {
   }
 }
 
-// 图谱"刷新"：重新拉取图谱，并再次触发抽取（借此重试之前失败的章节，
-// 例如在修复 LLM/接口故障后手动补齐缺失的章节）。
-const refreshGraph = async () => {
-  await loadGraph()
-  ensureAhead()
-}
-
 // ---------- 按需增量抽取 + 轮询 ----------
 let pollTimer = null
 let polling = false
@@ -1152,6 +1161,13 @@ onUnmounted(() => {
 }
 .back-btn:hover { background: rgba(255,255,255,0.1); }
 .nav-right { display: flex; align-items: center; gap: 12px; }
+/* 深色顶栏上的语言切换按钮：提高对比度 */
+.reader-nav :deep(.switcher-trigger) {
+  color: #fff; border-color: rgba(255,255,255,0.3);
+}
+.reader-nav :deep(.switcher-trigger:hover) {
+  border-color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.1);
+}
 .book-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lang-badge {
   font-size: 11px; padding: 2px 8px; border-radius: 10px;
@@ -1326,15 +1342,23 @@ onUnmounted(() => {
 }
 .episode-title { font-size: 20px; font-weight: 700; color: #111; }
 .episode-head-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.chapters-read-inline { font-size: 13px; color: #777; font-weight: 500; }
-.episode-counter { font-size: 12px; color: #999; font-family: monospace; }
-.read-toggle {
-  border: 1px solid #ddd; background: #fff; color: #666;
-  border-radius: 14px; padding: 4px 12px; font-size: 12px; font-weight: 600;
-  cursor: pointer; white-space: nowrap; transition: all 0.15s;
+/* 当前章节已读进度环（点击可切换整章已读/未读） */
+.read-ring {
+  position: relative; width: 34px; height: 34px; padding: 0; border: none;
+  background: none; cursor: pointer; flex-shrink: 0;
 }
-.read-toggle:hover { border-color: #FF4500; color: #FF4500; }
-.read-toggle.read { background: #FFF3E0; color: #FF4500; border-color: #FFCC80; }
+.read-ring-svg { width: 34px; height: 34px; transform: rotate(-90deg); }
+.read-ring-track { fill: none; stroke: #eee; stroke-width: 3.2; }
+.read-ring-fill {
+  fill: none; stroke: #FF4500; stroke-width: 3.2; stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s ease;
+}
+.read-ring-text {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #999; font-family: monospace;
+}
+.read-ring.done .read-ring-text { color: #FF4500; font-size: 15px; }
+.read-ring:hover .read-ring-fill { stroke: #e63e00; }
 
 /* detail-close 复用于抽屉 */
 .detail-close {

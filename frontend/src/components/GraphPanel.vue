@@ -1,58 +1,59 @@
 <template>
   <div class="graph-panel">
     <div class="panel-header">
-      <span class="panel-title">{{ $t('graph.panelTitle') }}</span>
+      <div class="header-left">
+        <span class="panel-title">{{ $t('graph.panelTitle') }}</span>
+      </div>
       <div class="header-tools">
-        <button class="tool-btn" @click="$emit('refresh')" :disabled="loading" :title="$t('graph.refreshGraph')">
-          <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
-          <span class="btn-text">{{ $t('graph.refreshGraph') }}</span>
-        </button>
-        <button class="tool-btn" @click="$emit('toggle-maximize')" :title="$t('graph.toggleMaximize')">
-          <span class="icon-maximize">⛶</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- 底部图谱工具栏：集成剧透控制与视图切换 -->
-    <div v-if="episodeCount" class="graph-footer-tools">
-      <div class="reveal-compact">
-        <span class="reveal-label" :title="revealEpisodeTitle">
-          {{ $t('graph.revealBarLabel', { current: revealDisplay, total: episodeCount }) }}
-        </span>
-        <div class="reveal-slider-wrap">
-          <button class="reveal-step-sm" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
-          <input
-            class="reveal-slider-sm"
-            type="range"
-            min="1"
-            :max="Math.max(episodeCount, 1)"
-            :value="revealDisplay"
-            :disabled="!episodeCount"
-            @input="setRevealFromInput"
-            :title="$t('graph.revealBarCaption')"
-          />
-          <button class="reveal-step-sm" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
-        </div>
-        <button class="reveal-action-sm" @click="setRevealToCurrent" :title="$t('graph.revealCurrent')">{{ $t('graph.revealCurrent') }}</button>
-        <button class="reveal-action-sm" @click="setRevealToLatest" :title="$t('graph.revealLatest')">{{ $t('graph.revealLatest') }}</button>
-      </div>
-
-      <div class="view-toggles">
         <button
-          class="view-toggle-btn"
-          :class="{ active: chapterOnly }"
-          @click="chapterOnly = !chapterOnly"
-          :title="$t('graph.chapterOnly')"
+          class="tool-btn"
+          :class="{ active: showEdgeLabels }"
+          @click="toggleEdgeLabels"
+          :title="densityHint ? ($t('graph.showEdgeLabels') + ' · ' + $t('graph.denseGraphHint', { size: densityMessage })) : $t('graph.showEdgeLabels')"
         >
-          <span>▤</span> {{ $t('graph.chapterOnly') }}
+          <span>⤳</span>
+          <span class="btn-text">{{ $t('graph.showEdgeLabels') }}</span>
         </button>
         <button
-          class="view-toggle-btn"
+          class="tool-btn"
           :class="{ active: focusUnread }"
           @click="focusUnread = !focusUnread"
           :title="$t('graph.focusUnread')"
         >
-          <span>◐</span> {{ $t('graph.focusUnread') }}
+          <span>◐</span>
+          <span class="btn-text">{{ $t('graph.focusUnread') }}</span>
+        </button>
+        <div class="legend-control" ref="legendControl">
+          <button
+            class="tool-btn"
+            :class="{ active: legendOpen }"
+            :disabled="!entityTypes.length"
+            @click.stop="legendOpen = !legendOpen"
+            :title="$t('graph.entityTypes')"
+          >
+            <span>◧</span>
+            <span class="btn-text">{{ $t('graph.entityTypes') }}</span>
+          </button>
+          <div v-if="legendOpen && entityTypes.length" class="legend-popover" @click.stop>
+            <div class="legend-items">
+              <div
+                class="legend-item"
+                v-for="type in entityTypes"
+                :key="type.name"
+                :class="{ active: activeType === type.name }"
+                @click="highlightType(type.name)"
+              >
+                <span class="legend-dot" :style="{ background: type.color }"></span>
+                <span class="legend-label">{{ type.name }}</span>
+              </div>
+            </div>
+            <div class="legend-unread" v-if="unseenNodeCount || unseenEdgeCount">
+              {{ $t('graph.unreadNodes', { n: unseenNodeCount }) }} · {{ $t('graph.unreadLinks', { n: unseenEdgeCount }) }}
+            </div>
+          </div>
+        </div>
+        <button class="tool-btn" @click="$emit('toggle-maximize')" :title="$t('graph.toggleMaximize')">
+          <span class="icon-maximize">⛶</span>
         </button>
       </div>
     </div>
@@ -197,48 +198,31 @@
       </div>
     </div>
 
-    <div v-if="hasGraph && entityTypes.length" class="graph-legend" :class="{ collapsed: legendCollapsed }">
-      <div class="legend-head" @click="legendCollapsed = !legendCollapsed">
-        <span class="legend-title">{{ $t('graph.entityTypes') }}</span>
-        <button class="legend-toggle" :title="$t('graph.entityTypes')">{{ legendCollapsed ? '▸' : '▾' }}</button>
+    <!-- 底部条：视图范围（累计/本章）+ 防剧透揭示控制 -->
+    <div v-if="hasGraph" class="reveal-footer">
+      <div class="scope-seg">
+        <button class="scope-seg-btn" :class="{ active: !chapterOnly }" @click="chapterOnly = false">{{ $t('graph.cumulative') }}</button>
+        <button class="scope-seg-btn" :class="{ active: chapterOnly }" @click="chapterOnly = true">{{ $t('graph.chapterOnly') }}</button>
       </div>
-      <template v-if="!legendCollapsed">
-        <div class="legend-items">
-          <div
-            class="legend-item"
-            v-for="type in entityTypes"
-            :key="type.name"
-            :class="{ active: activeType === type.name }"
-            @click="highlightType(type.name)"
-          >
-            <span class="legend-dot" :style="{ background: type.color }"></span>
-            <span class="legend-label">{{ type.name }}</span>
-          </div>
-        </div>
-        <div class="legend-unread" v-if="unseenNodeCount || unseenEdgeCount">
-          {{ $t('graph.unreadNodes', { n: unseenNodeCount }) }} · {{ $t('graph.unreadLinks', { n: unseenEdgeCount }) }}
-        </div>
-      </template>
+      <!-- 仅累计视图显示，控制图谱展开到第几章（与图谱加载进度无关） -->
+      <div v-if="episodeCount && !chapterOnly" class="reveal-inline" :title="$t('graph.revealBarCaption')">
+        <span class="reveal-inline-label" :title="revealEpisodeTitle">
+          {{ $t('graph.revealBarLabel', { current: revealDisplay, total: episodeCount }) }}
+        </span>
+        <button class="reveal-step" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
+        <input
+          class="reveal-slider"
+          type="range"
+          min="1"
+          :max="Math.max(episodeCount, 1)"
+          :value="revealDisplay"
+          :disabled="!episodeCount"
+          @input="setRevealFromInput"
+        />
+        <button class="reveal-step" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
+      </div>
     </div>
 
-    <div v-if="hasGraph" class="edge-labels-toggle">
-      <label class="toggle-switch">
-        <input type="checkbox" v-model="showEdgeLabels" @change="onEdgeLabelToggle" />
-        <span class="slider"></span>
-      </label>
-      <span class="toggle-label">{{ $t('graph.showEdgeLabels') }}</span>
-      <span
-        v-if="densityHint"
-        class="label-help"
-        tabindex="0"
-        :aria-label="$t('graph.denseGraphHint', { size: densityMessage })"
-      >
-        ?
-        <span class="label-help-tooltip">
-          {{ $t('graph.denseGraphHint', { size: densityMessage }) }}
-        </span>
-      </span>
-    </div>
   </div>
 </template>
 
@@ -262,7 +246,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'refresh', 'toggle-maximize', 'jump',
+  'toggle-maximize', 'jump',
   'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change', 'go-back'
 ])
 
@@ -277,8 +261,9 @@ const activeReelIndex = ref(0)
 const focusUnread = ref(false)
 // 只显示当前章节的图谱（关系/实体过多时更快）；关闭时为累计视图
 const chapterOnly = ref(false)
-// 实体类型图例：可收起，点击某类型高亮该类全部实体
-const legendCollapsed = ref(false)
+// 实体类型图例：以 header 弹层展示，点击某类型高亮该类全部实体
+const legendOpen = ref(false)
+const legendControl = ref(null)
 const activeType = ref(null)
 
 // 已查看集合（快速查询）
@@ -310,14 +295,6 @@ const setRevealFromInput = (e) => {
 
 const stepReveal = (delta) => {
   emitRevealMax(currentRevealIndex.value + delta)
-}
-
-const setRevealToCurrent = () => {
-  emitRevealMax(props.viewEpisode ?? 0)
-}
-
-const setRevealToLatest = () => {
-  emitRevealMax(props.latestReadEpisode ?? 0)
 }
 
 // 向阅读面板同步当前选中项，供其导航历史快照/恢复使用
@@ -423,7 +400,8 @@ const colorForType = (type) => {
   return t ? t.color : '#999'
 }
 
-const onEdgeLabelToggle = () => {
+const toggleEdgeLabels = () => {
+  showEdgeLabels.value = !showEdgeLabels.value
   edgeLabelsUserOverrode.value = true
 }
 
@@ -544,6 +522,8 @@ const applySeenStyles = () => {
       .attr('stroke-dasharray', d => seenEdgeSet.value.has(d.data.id) ? null : '5,4')
       .attr('opacity', d => dimEdge(d.data.id) ? 0.15 : 1)
   }
+  // 类型隔离时，透明度以隔离结果为准
+  if (activeType.value) applyTypeHighlight()
 }
 
 const clearGraphHighlight = () => {
@@ -551,17 +531,27 @@ const clearGraphHighlight = () => {
   if (linkSel) linkSel.attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
 }
 
-// 按实体类型高亮该类全部节点
+// 按实体类型隔离：只显示该类节点，其余（及其相连关系）淡出隐藏
 const applyTypeHighlight = () => {
   if (!nodeSel || !activeType.value) return
-  nodeSel.filter(d => (d.type || '—') === activeType.value)
-    .attr('stroke', HL_ACCENT).attr('stroke-width', 4.5)
+  const matchIds = new Set(
+    visibleNodes.value
+      .filter(n => (n.type || '—') === activeType.value)
+      .map(n => n.id)
+  )
+  const edgeVisible = (d) => matchIds.has(d.source.id) && matchIds.has(d.target.id)
+  nodeSel.attr('opacity', d => matchIds.has(d.id) ? 1 : 0.06)
+  if (nodeLabelSel) nodeLabelSel.attr('opacity', d => matchIds.has(d.id) ? 1 : 0)
+  if (linkSel) linkSel.attr('opacity', d => edgeVisible(d) ? 1 : 0.04)
+  if (linkLabelSel) linkLabelSel.attr('opacity', d => edgeVisible(d) ? 1 : 0)
+  if (linkLabelBgSel) linkLabelBgSel.attr('opacity', d => edgeVisible(d) ? 1 : 0)
 }
 
 const highlightType = (typeName) => {
   if (activeType.value === typeName) {
     activeType.value = null
     clearGraphHighlight()
+    applySeenStyles()
     return
   }
   // 类型高亮与选中详情互斥
@@ -966,15 +956,24 @@ watch([() => props.seenEdges, focusUnread, () => selectedItem.value], () => {
 
 const handleResize = () => nextTick(renderGraph)
 
+// 点击弹层外部关闭实体类型图例
+const onDocumentMouseDown = (e) => {
+  if (!legendOpen.value) return
+  if (legendControl.value && legendControl.value.contains(e.target)) return
+  legendOpen.value = false
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', onKey)
+  document.addEventListener('mousedown', onDocumentMouseDown)
   nextTick(renderGraph)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', onKey)
+  document.removeEventListener('mousedown', onDocumentMouseDown)
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
   if (simulation) simulation.stop()
 })
@@ -994,17 +993,57 @@ onUnmounted(() => {
 .panel-header {
   position: absolute;
   top: 0; left: 0; right: 0;
-  padding: 16px 20px;
+  padding: 12px 20px;
   z-index: 10;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: linear-gradient(to bottom, rgba(255,255,255,0.95), rgba(255,255,255,0));
+  gap: 10px 16px; flex-wrap: wrap;
+  background: linear-gradient(to bottom, rgba(255,255,255,0.95), rgba(255,255,255,0.75) 60%, rgba(255,255,255,0));
   pointer-events: none;
 }
 
-.panel-title { font-size: 14px; font-weight: 600; color: #333; pointer-events: auto; }
+.header-left { pointer-events: auto; display: flex; align-items: center; gap: 14px; min-width: 0; flex-wrap: wrap; }
+.panel-title { font-size: 14px; font-weight: 600; color: #333; white-space: nowrap; }
 .header-tools { pointer-events: auto; display: flex; gap: 10px; align-items: center; }
+
+/* 底部条：视图范围（累计/本章）+ 防剧透揭示控制，横跨整个面板宽度以避免换行 */
+.reveal-footer {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  padding: 10px 20px; flex-wrap: wrap;
+  background: linear-gradient(to top, rgba(255,255,255,0.95), rgba(255,255,255,0.75) 60%, rgba(255,255,255,0));
+}
+
+/* 视图范围分段控件：累计 / 本章 */
+.scope-seg {
+  display: inline-flex; border: 1px solid #E0E0E0; border-radius: 6px; overflow: hidden;
+  background: #FFF; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.scope-seg-btn {
+  height: 30px; padding: 0 14px; border: none; background: #FFF;
+  color: #666; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.scope-seg-btn + .scope-seg-btn { border-left: 1px solid #E0E0E0; }
+.scope-seg-btn:hover { background: #F5F5F5; color: #000; }
+.scope-seg-btn.active { background: #1A1A1A; color: #FFF; }
+
+/* 防剧透揭示控制（底部条内，风格与工具按钮一致） */
+.reveal-inline {
+  display: flex; align-items: center; gap: 8px;
+  background: #FFF; border: 1px solid #E0E0E0; border-radius: 6px; padding: 4px 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.reveal-inline-label {
+  font-size: 12px; font-weight: 600; color: #444; white-space: nowrap;
+}
+.reveal-slider { width: 140px; accent-color: #1A1A1A; cursor: pointer; }
+.reveal-step {
+  width: 22px; height: 22px; border: 1px solid #E0E0E0; border-radius: 5px;
+  background: #FFF; color: #555; cursor: pointer; font-size: 14px; line-height: 1; flex-shrink: 0;
+}
+.reveal-step:hover { background: #F5F5F5; border-color: #CCC; color: #000; }
 
 .tool-btn {
   height: 32px; padding: 0 12px;
@@ -1016,35 +1055,7 @@ onUnmounted(() => {
 .tool-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .tool-btn:disabled:hover { background: #FFF; color: #666; border-color: #E0E0E0; }
 .tool-btn .btn-text { font-size: 12px; }
-.icon-refresh.spinning { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-/* 剧透揭示条：始终可见的紫色控制条，位于面板标题下方 */
-.reveal-bar {
-  position: absolute; top: 52px; left: 20px; z-index: 12;
-  max-width: calc(100% - 40px);
-  background: #F7F0FA; border: 1px solid #E2D2EC; border-radius: 10px;
-  padding: 8px 12px; box-shadow: 0 4px 14px rgba(123,45,142,0.12);
-}
-.reveal-bar-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.reveal-bar-label {
-  font-size: 12px; font-weight: 700; color: #7B2D8E; white-space: nowrap;
-  max-width: 320px; overflow: hidden; text-overflow: ellipsis;
-}
-.reveal-bar-controls { display: flex; align-items: center; gap: 8px; }
-.reveal-bar-caption { font-size: 11px; color: #9B7BA8; margin-top: 4px; }
-.reveal-slider { width: 150px; accent-color: #7B2D8E; cursor: pointer; }
-.reveal-step {
-  width: 28px; height: 28px; border: 1px solid #E0E0E0; border-radius: 6px;
-  background: #FFF; color: #555; cursor: pointer; font-size: 16px; line-height: 1;
-}
-.reveal-step:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
-.reveal-action {
-  height: 28px; padding: 0 10px; border: 1px solid #E0E0E0; border-radius: 6px;
-  background: #FAFAFA; color: #444; cursor: pointer; font-size: 12px; font-weight: 600;
-  white-space: nowrap;
-}
-.reveal-action:hover { background: #F5F0F8; border-color: #D6C7E0; color: #7B2D8E; }
 
 .graph-container { width: 100%; height: 100%; }
 .graph-view, .graph-svg { width: 100%; height: 100%; display: block; }
@@ -1056,27 +1067,14 @@ onUnmounted(() => {
 .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.2; }
 .empty-icon.error-icon { opacity: 0.6; color: #E53935; }
 
-.graph-legend {
-  position: absolute; bottom: 24px; left: 24px;
-  background: rgba(255,255,255,0.95); padding: 12px 16px; border-radius: 8px;
-  border: 1px solid #EAEAEA; box-shadow: 0 4px 16px rgba(0,0,0,0.06); z-index: 10;
+/* 实体类型弹层（从 header 工具按钮展开） */
+.legend-control { position: relative; }
+.legend-popover {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
+  background: #FFF; padding: 12px 14px; border-radius: 8px;
+  border: 1px solid #EAEAEA; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
 }
-.graph-legend.collapsed { padding: 8px 14px; }
-.legend-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  cursor: pointer; user-select: none;
-}
-.graph-legend:not(.collapsed) .legend-head { margin-bottom: 10px; }
-.legend-title {
-  font-size: 11px; font-weight: 600; color: #E91E63;
-  text-transform: uppercase; letter-spacing: 0.5px;
-}
-.legend-toggle {
-  border: none; background: none; cursor: pointer; color: #999;
-  font-size: 11px; line-height: 1; padding: 0;
-}
-.legend-toggle:hover { color: #E91E63; }
-.legend-items { display: flex; flex-wrap: wrap; gap: 8px 10px; max-width: 320px; }
+.legend-items { display: flex; flex-wrap: wrap; gap: 8px 10px; max-width: 280px; }
 .legend-item {
   display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555;
   cursor: pointer; padding: 3px 8px; border-radius: 12px;
@@ -1086,49 +1084,6 @@ onUnmounted(() => {
 .legend-item.active { background: #FCE4EC; border-color: #E91E63; color: #E91E63; font-weight: 600; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .legend-label { white-space: nowrap; }
-
-.edge-labels-toggle {
-  position: absolute; top: 60px; right: 20px;
-  display: flex; align-items: center; gap: 10px;
-  background: #FFF; padding: 8px 14px; border-radius: 20px;
-  border: 1px solid #E0E0E0; box-shadow: 0 2px 8px rgba(0,0,0,0.04); z-index: 10;
-}
-.toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; }
-.toggle-switch input { opacity: 0; width: 0; height: 0; }
-.slider {
-  position: absolute; cursor: pointer; inset: 0;
-  background-color: #E0E0E0; border-radius: 22px; transition: 0.3s;
-}
-.slider:before {
-  position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
-  background-color: white; border-radius: 50%; transition: 0.3s;
-}
-input:checked + .slider { background-color: #7B2D8E; }
-input:checked + .slider:before { transform: translateX(18px); }
-.toggle-label { font-size: 12px; color: #666; }
-.label-help {
-  position: relative; display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; border-radius: 50%; border: 1px solid #D0D0D0;
-  color: #777; font-size: 12px; font-weight: 700; cursor: help; user-select: none;
-}
-.label-help:hover, .label-help:focus-visible {
-  border-color: #7B2D8E; color: #7B2D8E; outline: none;
-}
-.label-help-tooltip {
-  position: absolute; top: calc(100% + 8px); right: 0; width: 240px;
-  background: rgba(0,0,0,0.82); color: #FFF; border-radius: 8px;
-  padding: 8px 10px; font-size: 12px; line-height: 1.5; font-weight: 500;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.16); opacity: 0; pointer-events: none;
-  transform: translateY(-4px); transition: opacity 0.15s, transform 0.15s; z-index: 30;
-}
-.label-help-tooltip::before {
-  content: ""; position: absolute; top: -5px; right: 6px; width: 10px; height: 10px;
-  background: rgba(0,0,0,0.82); transform: rotate(45deg);
-}
-.label-help:hover .label-help-tooltip,
-.label-help:focus-visible .label-help-tooltip {
-  opacity: 1; transform: translateY(0);
-}
 
 /* 详情面板 */
 .detail-panel {
@@ -1216,7 +1171,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 .reel-quote:hover { background: #F0F0FF; }
 
 .graph-building-hint {
-  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 68px; left: 50%; transform: translateX(-50%);
   background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px); color: #fff;
   padding: 10px 20px; border-radius: 30px; font-size: 13px;
   display: flex; align-items: center; gap: 10px; z-index: 100; font-weight: 500;
@@ -1251,9 +1206,9 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 
 .tool-btn.active {
-  background: #7B2D8E; color: #fff; border-color: #7B2D8E;
+  background: #1A1A1A; color: #fff; border-color: #1A1A1A;
 }
-.tool-btn.active:hover { background: #6a2679; color: #fff; }
+.tool-btn.active:hover { background: #000; color: #fff; }
 
 .legend-unread {
   margin-top: 8px; padding-top: 8px; border-top: 1px solid #EEE;
