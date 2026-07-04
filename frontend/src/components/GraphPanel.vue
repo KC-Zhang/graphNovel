@@ -7,53 +7,54 @@
           <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
           <span class="btn-text">{{ $t('graph.refreshGraph') }}</span>
         </button>
-        <button
-          class="tool-btn"
-          :class="{ active: chapterOnly }"
-          @click="chapterOnly = !chapterOnly"
-          :title="$t('graph.chapterOnly')"
-        >
-          <span>▤</span>
-          <span class="btn-text">{{ $t('graph.chapterOnly') }}</span>
-        </button>
-        <button
-          class="tool-btn"
-          :class="{ active: focusUnread }"
-          @click="focusUnread = !focusUnread"
-          :title="$t('graph.focusUnread')"
-        >
-          <span>◐</span>
-          <span class="btn-text">{{ $t('graph.focusUnread') }}</span>
-        </button>
         <button class="tool-btn" @click="$emit('toggle-maximize')" :title="$t('graph.toggleMaximize')">
           <span class="icon-maximize">⛶</span>
         </button>
       </div>
     </div>
 
-    <!-- 剧透揭示条：始终可见，控制图谱展开到第几章（与图谱加载进度无关） -->
-    <div v-if="episodeCount" class="reveal-bar">
-      <div class="reveal-bar-row">
-        <span class="reveal-bar-label" :title="revealEpisodeTitle">
+    <!-- 底部图谱工具栏：集成剧透控制与视图切换 -->
+    <div v-if="episodeCount" class="graph-footer-tools">
+      <div class="reveal-compact">
+        <span class="reveal-label" :title="revealEpisodeTitle">
           {{ $t('graph.revealBarLabel', { current: revealDisplay, total: episodeCount }) }}
         </span>
-        <div class="reveal-bar-controls">
-          <button class="reveal-step" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
+        <div class="reveal-slider-wrap">
+          <button class="reveal-step-sm" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
           <input
-            class="reveal-slider"
+            class="reveal-slider-sm"
             type="range"
             min="1"
             :max="Math.max(episodeCount, 1)"
             :value="revealDisplay"
             :disabled="!episodeCount"
             @input="setRevealFromInput"
+            :title="$t('graph.revealBarCaption')"
           />
-          <button class="reveal-step" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
-          <button class="reveal-action" @click="setRevealToCurrent">{{ $t('graph.revealCurrent') }}</button>
-          <button class="reveal-action" @click="setRevealToLatest">{{ $t('graph.revealLatest') }}</button>
+          <button class="reveal-step-sm" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
         </div>
+        <button class="reveal-action-sm" @click="setRevealToCurrent" :title="$t('graph.revealCurrent')">{{ $t('graph.revealCurrent') }}</button>
+        <button class="reveal-action-sm" @click="setRevealToLatest" :title="$t('graph.revealLatest')">{{ $t('graph.revealLatest') }}</button>
       </div>
-      <div class="reveal-bar-caption">{{ $t('graph.revealBarCaption') }}</div>
+
+      <div class="view-toggles">
+        <button
+          class="view-toggle-btn"
+          :class="{ active: chapterOnly }"
+          @click="chapterOnly = !chapterOnly"
+          :title="$t('graph.chapterOnly')"
+        >
+          <span>▤</span> {{ $t('graph.chapterOnly') }}
+        </button>
+        <button
+          class="view-toggle-btn"
+          :class="{ active: focusUnread }"
+          @click="focusUnread = !focusUnread"
+          :title="$t('graph.focusUnread')"
+        >
+          <span>◐</span> {{ $t('graph.focusUnread') }}
+        </button>
+      </div>
     </div>
 
     <div class="graph-container" ref="graphContainer">
