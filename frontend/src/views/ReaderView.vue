@@ -55,14 +55,6 @@
             </button>
           </div>
         </div>
-        <button
-          v-if="phase === 'ready'"
-          class="back-nav-btn"
-          :disabled="!navHistory.length"
-          @click="goBack"
-        >
-          ↩ {{ $t('reader.back') }}
-        </button>
         <button v-if="phase === 'ready'" class="chapters-btn" @click="showChapters = !showChapters">
           ☰ {{ $t('reader.chapters') }}
         </button>
@@ -149,6 +141,16 @@
         </div>
 
         <div class="book-scroll">
+          <button
+            v-if="navHistory.length"
+            class="back-float-btn"
+            @click="goBack"
+            :title="$t('reader.back')"
+          >
+            <span class="back-float-arrow">↩</span>
+            <span class="back-float-label">{{ $t('reader.back') }}</span>
+            <span class="back-float-depth">{{ navHistory.length }}</span>
+          </button>
           <div class="book-text" ref="bookText" @scroll="onBookScroll">
             <p
               v-for="(para, i) in renderedParagraphs"
@@ -1231,12 +1233,23 @@ onUnmounted(() => {
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
 }
 .chapters-btn:hover { background: rgba(255,255,255,0.1); }
-.back-nav-btn {
-  background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #fff;
-  padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+.back-float-btn {
+  position: absolute; top: 12px; left: 20px; z-index: 6;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #FF4500; color: #fff; border: none;
+  padding: 7px 12px 7px 11px; border-radius: 20px; cursor: pointer;
+  font-size: 13px; font-weight: 600;
+  box-shadow: 0 2px 10px rgba(255,69,0,0.35);
+  transition: background 0.15s, box-shadow 0.15s, transform 0.15s;
 }
-.back-nav-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
-.back-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.back-float-btn:hover { background: #e63e00; box-shadow: 0 4px 14px rgba(255,69,0,0.45); transform: translateY(-1px); }
+.back-float-btn:active { transform: translateY(0); }
+.back-float-arrow { font-size: 15px; line-height: 1; }
+.back-float-depth {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: rgba(255,255,255,0.28); color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
 
 /* 章节目录抽屉 */
 .chapters-overlay {
@@ -1361,7 +1374,7 @@ onUnmounted(() => {
 }
 .detail-close:hover { color: #333; }
 
-.book-scroll { flex: 1; display: flex; min-height: 0; }
+.book-scroll { flex: 1; display: flex; min-height: 0; position: relative; }
 .book-text {
   flex: 1; overflow-y: auto; padding: 8px 32px 24px;
   line-height: 1.9; font-size: 16px; color: #2b2b2b;
