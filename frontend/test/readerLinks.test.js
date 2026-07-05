@@ -1,7 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createMentionIndex, findQuoteRange, shouldMarkLinkRead } from '../src/utils/readerLinks.js'
+import {
+  GRAPH_SCOPES,
+  createMentionIndex,
+  findQuoteRange,
+  scopeEpisodeLimit,
+  shouldMarkLinkRead,
+} from '../src/utils/readerLinks.js'
 
 test('findQuoteRange tolerates whitespace and punctuation differences', () => {
   const text = 'Alice said: "Never eat alone." Then Bob nodded.'
@@ -27,6 +33,71 @@ test('createMentionIndex groups only revealed mentions by episode', () => {
   assert.equal(index.get(1).length, 1)
   assert.equal(index.has(3), false)
   assert.equal(index.get(1)[0].type, 'edge')
+})
+
+test('createMentionIndex filters future mentions inside already-revealed items', () => {
+  const graph = {
+    nodes: [
+      {
+        id: 'n1',
+        name: 'Alice',
+        first_episode: 0,
+        mentions: [
+          { episode: 0, quote: 'Alice arrives' },
+          { episode: 3, quote: 'Alice reveals the ending' },
+        ],
+      },
+    ],
+    edges: [],
+  }
+
+  const index = createMentionIndex(graph, {
+    scope: GRAPH_SCOPES.UPTO,
+    viewEpisode: 1,
+    total: 4,
+  })
+
+  assert.equal(index.has(0), true)
+  assert.equal(index.has(3), false)
+})
+
+test('createMentionIndex supports current-chapter and all scope', () => {
+  const graph = {
+    nodes: [
+      {
+        id: 'n1',
+        name: 'Alice',
+        first_episode: 0,
+        mentions: [
+          { episode: 0, quote: 'Alice first' },
+          { episode: 2, quote: 'Alice current' },
+        ],
+      },
+    ],
+    edges: [],
+  }
+
+  const current = createMentionIndex(graph, {
+    scope: GRAPH_SCOPES.CURRENT,
+    viewEpisode: 2,
+    total: 3,
+  })
+  const all = createMentionIndex(graph, {
+    scope: GRAPH_SCOPES.ALL,
+    viewEpisode: 0,
+    total: 3,
+  })
+
+  assert.equal(current.has(0), false)
+  assert.equal(current.get(2).length, 1)
+  assert.equal(all.get(0).length, 1)
+  assert.equal(all.get(2).length, 1)
+})
+
+test('scopeEpisodeLimit maps all mode to the final episode', () => {
+  assert.equal(scopeEpisodeLimit({ scope: GRAPH_SCOPES.CURRENT, viewEpisode: 2, total: 5 }), 2)
+  assert.equal(scopeEpisodeLimit({ scope: GRAPH_SCOPES.UPTO, viewEpisode: 2, total: 5 }), 2)
+  assert.equal(scopeEpisodeLimit({ scope: GRAPH_SCOPES.ALL, viewEpisode: 2, total: 5 }), 4)
 })
 
 test('shouldMarkLinkRead waits until a link scrolls past the viewport top', () => {

@@ -47,11 +47,49 @@ export const findQuoteRange = (text, quote) => {
   return null
 }
 
-export const createMentionIndex = (graphData, maxReveal = Infinity) => {
+export const GRAPH_SCOPES = Object.freeze({
+  CURRENT: 'current',
+  UPTO: 'upto',
+  ALL: 'all',
+})
+
+export const normalizeGraphScope = (scope) => (
+  Object.values(GRAPH_SCOPES).includes(scope) ? scope : GRAPH_SCOPES.UPTO
+)
+
+export const scopeEpisodeLimit = ({ scope = GRAPH_SCOPES.UPTO, viewEpisode = 0, total = 0 } = {}) => {
+  const normalized = normalizeGraphScope(scope)
+  if (normalized === GRAPH_SCOPES.ALL) {
+    return Number.isFinite(total) && total > 0 ? total - 1 : Infinity
+  }
+  const episode = Number(viewEpisode)
+  if (episode === Infinity) return Infinity
+  return Number.isFinite(episode) ? Math.max(0, episode) : 0
+}
+
+export const scopeAllowsMention = (episode, options = {}) => {
+  const normalized = normalizeGraphScope(options.scope)
+  if (normalized === GRAPH_SCOPES.ALL) return true
+  const ep = Number(episode)
+  const viewEpisode = scopeEpisodeLimit(options)
+  if (!Number.isFinite(ep)) return false
+  if (normalized === GRAPH_SCOPES.CURRENT) return ep === viewEpisode
+  return ep <= viewEpisode
+}
+
+export const createMentionIndex = (graphData, options = Infinity) => {
   const index = new Map()
+  const scopeOptions = typeof options === 'number'
+    ? { scope: GRAPH_SCOPES.UPTO, viewEpisode: options }
+    : { ...(options || {}), scope: normalizeGraphScope(options?.scope) }
+
   const pushMentions = (item, type, name) => {
-    if ((item.first_episode ?? 0) > maxReveal) return
+    const firstEpisode = item.first_episode ?? 0
+    if (scopeOptions.scope === GRAPH_SCOPES.UPTO && firstEpisode > scopeEpisodeLimit(scopeOptions)) return
+    if (scopeOptions.scope === GRAPH_SCOPES.CURRENT && !(item.mentions || []).some(m => scopeAllowsMention(m.episode, scopeOptions))) return
+
     for (const mention of (item.mentions || [])) {
+      if (!scopeAllowsMention(mention.episode, scopeOptions)) continue
       if (!index.has(mention.episode)) index.set(mention.episode, [])
       index.get(mention.episode).push({
         quote: mention.quote,

@@ -3,6 +3,19 @@
     <div class="panel-header">
       <div class="header-left">
         <span class="panel-title">{{ $t('graph.panelTitle') }}</span>
+        <div class="graph-scope-control" :aria-label="$t('graph.scopeLabel')">
+          <button
+            v-for="mode in scopeModes"
+            :key="mode.value"
+            class="scope-mode-btn"
+            :class="{ active: activeGraphScope === mode.value }"
+            @click="setGraphScope(mode.value)"
+            :title="$t(mode.titleKey)"
+            :aria-label="$t(mode.titleKey)"
+          >
+            <FontAwesomeIcon :icon="mode.icon" />
+          </button>
+        </div>
       </div>
       <div class="header-tools">
         <button
@@ -79,18 +92,9 @@
           </button>
         </div>
 
-        <!-- 详情面板 -->
+          <!-- 详情面板 -->
         <div v-if="selectedItem" class="detail-panel">
           <div class="detail-panel-header">
-            <button
-              v-if="navDepth"
-              class="detail-back-btn"
-              @click="$emit('go-back')"
-              :title="$t('reader.back')"
-            >
-              <span class="detail-back-arrow">↩</span>
-              <span class="detail-back-depth">{{ navDepth }}</span>
-            </button>
             <span class="detail-title">
               {{ selectedItem.type === 'node' ? $t('graph.nodeDetails') : $t('graph.relationship') }}
             </span>
@@ -115,20 +119,6 @@
             </div>
             <div class="node-desc" v-if="selectedItem.node.description">{{ selectedItem.node.description }}</div>
 
-            <div class="mentions" v-if="selectedItem.node.mentions && selectedItem.node.mentions.length">
-              <div class="section-title">{{ $t('graph.originalText') }}</div>
-              <div
-                v-for="(m, i) in selectedItem.node.mentions"
-                :key="'nm' + i"
-                class="mention-item"
-                @click="jumpTo(m)"
-              >
-                <span class="mention-ep">{{ episodeTitle(m.episode) }}</span>
-                <span class="mention-quote">“{{ m.quote }}”</span>
-                <span class="mention-jump">{{ $t('graph.readInBook') }} →</span>
-              </div>
-            </div>
-
             <!-- 关系走查 Edge Reel -->
             <div class="edge-reel" v-if="nodeEdges.length">
               <div class="reel-header">
@@ -151,12 +141,41 @@
                   </div>
                   <div class="reel-fact" v-if="er.edge.fact">{{ er.edge.fact }}</div>
                   <div
-                    v-if="er.edge.mentions && er.edge.mentions.length"
+                    v-if="firstVisibleMention(er.edge)"
                     class="reel-quote"
-                    @click.stop="jumpTo(er.edge.mentions[0])"
+                    @click.stop="jumpTo(firstVisibleMention(er.edge))"
                   >
-                    “{{ er.edge.mentions[0].quote }}” <span class="mention-jump">{{ $t('graph.readInBook') }} →</span>
+                    <span class="reel-quote-text">“{{ firstVisibleMention(er.edge).quote }}”</span>
+                    <span class="mention-jump">
+                      <FontAwesomeIcon :icon="faBookOpenReader" />
+                      {{ $t('graph.readInBook') }}
+                    </span>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mentions book-mentions" v-if="selectedMentions.length">
+              <button class="mentions-toggle" @click="bookMentionsOpen = !bookMentionsOpen">
+                <span class="section-title">
+                  <FontAwesomeIcon :icon="faBookOpenReader" />
+                  {{ $t('graph.originalText') }} ({{ selectedMentions.length }})
+                </span>
+                <FontAwesomeIcon :icon="bookMentionsOpen ? faChevronUp : faChevronDown" />
+              </button>
+              <div v-if="bookMentionsOpen" class="mentions-list">
+                <div
+                  v-for="(m, i) in selectedMentions"
+                  :key="'nm' + i"
+                  class="mention-item"
+                  @click="jumpTo(m)"
+                >
+                  <span class="mention-ep">{{ episodeTitle(m.episode) }}</span>
+                  <span class="mention-quote">“{{ m.quote }}”</span>
+                  <span class="mention-jump">
+                    <FontAwesomeIcon :icon="faBookOpenReader" />
+                    {{ $t('graph.readInBook') }}
+                  </span>
                 </div>
               </div>
             </div>
@@ -168,17 +187,28 @@
               {{ selectedItem.sourceName }} <span class="edge-arrow">→ {{ selectedItem.edge.label }} →</span> {{ selectedItem.targetName }}
             </div>
             <div class="node-desc" v-if="selectedItem.edge.fact">{{ selectedItem.edge.fact }}</div>
-            <div class="mentions" v-if="selectedItem.edge.mentions && selectedItem.edge.mentions.length">
-              <div class="section-title">{{ $t('graph.originalText') }}</div>
-              <div
-                v-for="(m, i) in selectedItem.edge.mentions"
-                :key="'em' + i"
-                class="mention-item"
-                @click="jumpTo(m)"
-              >
-                <span class="mention-ep">{{ episodeTitle(m.episode) }}</span>
-                <span class="mention-quote">“{{ m.quote }}”</span>
-                <span class="mention-jump">{{ $t('graph.readInBook') }} →</span>
+            <div class="mentions book-mentions" v-if="selectedMentions.length">
+              <button class="mentions-toggle" @click="bookMentionsOpen = !bookMentionsOpen">
+                <span class="section-title">
+                  <FontAwesomeIcon :icon="faBookOpenReader" />
+                  {{ $t('graph.originalText') }} ({{ selectedMentions.length }})
+                </span>
+                <FontAwesomeIcon :icon="bookMentionsOpen ? faChevronUp : faChevronDown" />
+              </button>
+              <div v-if="bookMentionsOpen" class="mentions-list">
+                <div
+                  v-for="(m, i) in selectedMentions"
+                  :key="'em' + i"
+                  class="mention-item"
+                  @click="jumpTo(m)"
+                >
+                  <span class="mention-ep">{{ episodeTitle(m.episode) }}</span>
+                  <span class="mention-quote">“{{ m.quote }}”</span>
+                  <span class="mention-jump">
+                    <FontAwesomeIcon :icon="faBookOpenReader" />
+                    {{ $t('graph.readInBook') }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -204,56 +234,39 @@
       </div>
     </div>
 
-    <!-- 底部条：视图范围（累计/本章）+ 防剧透揭示控制 -->
-    <div v-if="hasGraph" class="reveal-footer">
-      <div class="scope-seg">
-        <button class="scope-seg-btn" :class="{ active: !chapterOnly }" @click="chapterOnly = false">{{ $t('graph.cumulative') }}</button>
-        <button class="scope-seg-btn" :class="{ active: chapterOnly }" @click="chapterOnly = true">{{ $t('graph.chapterOnly') }}</button>
-      </div>
-      <!-- 仅累计视图显示，控制图谱展开到第几章（与图谱加载进度无关） -->
-      <div v-if="episodeCount && !chapterOnly" class="reveal-inline" :title="$t('graph.revealBarCaption')">
-        <span class="reveal-inline-label" :title="revealEpisodeTitle">
-          {{ $t('graph.revealBarLabel', { current: revealDisplay, total: episodeCount }) }}
-        </span>
-        <button class="reveal-step" @click="stepReveal(-1)" :title="$t('graph.revealDecrease')">−</button>
-        <input
-          class="reveal-slider"
-          type="range"
-          min="1"
-          :max="Math.max(episodeCount, 1)"
-          :value="revealDisplay"
-          :disabled="!episodeCount"
-          @input="setRevealFromInput"
-        />
-        <button class="reveal-step" @click="stepReveal(1)" :title="$t('graph.revealIncrease')">+</button>
-      </div>
-    </div>
-
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import * as d3 from 'd3'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import {
+  faBookOpenReader,
+  faChevronDown,
+  faChevronUp,
+  faFileLines,
+  faInfinity,
+  faLayerGroup,
+} from '@fortawesome/free-solid-svg-icons'
 import { graphDensityMessage, shouldAutoHideEdgeLabels } from '../utils/graphPerformance'
-import { clampRevealMax } from '../utils/revealProgress'
+import { GRAPH_SCOPES, normalizeGraphScope, scopeAllowsMention } from '../utils/readerLinks'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
-  currentEpisode: Number,   // 阅读进度（揭示阈值，累计视图）
   viewEpisode: Number,      // 当前正在阅读的章节（本章视图）
+  graphScope: { type: String, default: GRAPH_SCOPES.UPTO },
   episodes: Array,          // 章节元数据（用于标题）
   loading: Boolean,
   extractProgress: { type: Object, default: null },
   seenEdges: { type: Array, default: () => [] },  // 已查看关系 id（节点已读由此派生）
   selectRequest: { type: Object, default: null },  // 外部请求选中 { type, id, nonce }
   latestReadEpisode: { type: Number, default: 0 },
-  navDepth: { type: Number, default: 0 }  // 阅读导航返回栈深度
 })
 
 const emit = defineEmits([
   'toggle-maximize', 'jump',
-  'seen-edge', 'set-edge-seen', 'set-reveal-max', 'select-change', 'go-back', 'retry-extraction'
+  'seen-edge', 'set-edge-seen', 'set-graph-scope', 'select-change', 'retry-extraction'
 ])
 
 const graphContainer = ref(null)
@@ -265,8 +278,7 @@ const showEdgeLabels = ref(true)
 const edgeLabelsUserOverrode = ref(false)
 const activeReelIndex = ref(0)
 const focusUnread = ref(false)
-// 只显示当前章节的图谱（关系/实体过多时更快）；关闭时为累计视图
-const chapterOnly = ref(false)
+const bookMentionsOpen = ref(false)
 // 实体类型图例：以 header 弹层展示，点击某类型高亮该类全部实体
 const legendOpen = ref(false)
 const legendControl = ref(null)
@@ -285,26 +297,20 @@ const HL_ACTIVE = '#FF4500'
 const positionCache = new Map()
 
 const episodeCount = computed(() => props.episodes?.length || 0)
-const currentRevealIndex = computed(() => clampRevealMax(props.currentEpisode ?? 0, episodeCount.value))
-const revealDisplay = computed(() => episodeCount.value ? currentRevealIndex.value + 1 : 0)
-const revealEpisodeTitle = computed(() =>
-  props.episodes?.[currentRevealIndex.value]?.title || `#${revealDisplay.value}`
-)
+const activeGraphScope = computed(() => normalizeGraphScope(props.graphScope))
+const scopeModes = [
+  { value: GRAPH_SCOPES.CURRENT, icon: faFileLines, titleKey: 'graph.scopeCurrent' },
+  { value: GRAPH_SCOPES.UPTO, icon: faLayerGroup, titleKey: 'graph.scopeUpto' },
+  { value: GRAPH_SCOPES.ALL, icon: faInfinity, titleKey: 'graph.scopeAll' },
+]
 
-const emitRevealMax = (idx) => {
-  emit('set-reveal-max', clampRevealMax(idx, episodeCount.value))
-}
-
-const setRevealFromInput = (e) => {
-  emitRevealMax(Number(e.target.value) - 1)
-}
-
-const stepReveal = (delta) => {
-  emitRevealMax(currentRevealIndex.value + delta)
+const setGraphScope = (scope) => {
+  emit('set-graph-scope', normalizeGraphScope(scope))
 }
 
 // 向阅读面板同步当前选中项，供其导航历史快照/恢复使用
 watch(() => selectedItem.value, (sel) => {
+  bookMentionsOpen.value = false
   if (!sel) {
     emit('select-change', null)
   } else {
@@ -317,10 +323,19 @@ watch(() => selectedItem.value, (sel) => {
 
 // ---------- 可见子图（按阅读进度过滤） ----------
 const mentionedIn = (item, ep) => (item.mentions || []).some(m => m.episode === ep)
+const mentionScopeOptions = computed(() => ({
+  scope: activeGraphScope.value,
+  viewEpisode: props.viewEpisode ?? 0,
+  total: episodeCount.value,
+}))
+const visibleMentions = (item) => (item?.mentions || [])
+  .filter(m => scopeAllowsMention(m.episode, mentionScopeOptions.value))
+const firstVisibleMention = (item) => visibleMentions(item)[0]
 
 const visibleNodes = computed(() => {
   const nodes = props.graphData?.nodes || []
-  if (chapterOnly.value) {
+  if (activeGraphScope.value === GRAPH_SCOPES.ALL) return nodes
+  if (activeGraphScope.value === GRAPH_SCOPES.CURRENT) {
     const ep = props.viewEpisode ?? 0
     const edges = props.graphData?.edges || []
     // 本章提及的实体 + 本章关系涉及的两端实体
@@ -331,18 +346,21 @@ const visibleNodes = computed(() => {
     })
     return nodes.filter(n => keep.has(n.id))
   }
-  const upto = props.currentEpisode ?? 0
+  const upto = props.viewEpisode ?? 0
   return nodes.filter(n => (n.first_episode ?? 0) <= upto)
 })
 
 const visibleEdges = computed(() => {
   const ids = new Set(visibleNodes.value.map(n => n.id))
   const edges = props.graphData?.edges || []
-  if (chapterOnly.value) {
+  if (activeGraphScope.value === GRAPH_SCOPES.ALL) {
+    return edges.filter(e => ids.has(e.source) && ids.has(e.target))
+  }
+  if (activeGraphScope.value === GRAPH_SCOPES.CURRENT) {
     const ep = props.viewEpisode ?? 0
     return edges.filter(e => mentionedIn(e, ep) && ids.has(e.source) && ids.has(e.target))
   }
-  const upto = props.currentEpisode ?? 0
+  const upto = props.viewEpisode ?? 0
   return edges.filter(
     e => (e.first_episode ?? 0) <= upto && ids.has(e.source) && ids.has(e.target)
   )
@@ -425,6 +443,12 @@ const selectedSeen = computed(() => {
   if (!selectedItem.value) return false
   if (selectedItem.value.type === 'node') return nodeSeenSet.value.has(selectedItem.value.node.id)
   return seenEdgeSet.value.has(selectedItem.value.edge.id)
+})
+
+const selectedMentions = computed(() => {
+  const sel = selectedItem.value
+  if (!sel) return []
+  return visibleMentions(sel.type === 'node' ? sel.node : sel.edge)
 })
 
 const toggleSelectedSeen = () => {
@@ -938,7 +962,7 @@ const onKey = (e) => {
 }
 
 // ---------- watchers ----------
-const revealKey = computed(() => `${visibleNodes.value.length}_${visibleEdges.value.length}_${props.currentEpisode}_${chapterOnly.value ? 'c' + (props.viewEpisode ?? 0) : 'a'}`)
+const revealKey = computed(() => `${visibleNodes.value.length}_${visibleEdges.value.length}_${activeGraphScope.value}_${props.viewEpisode ?? 0}`)
 watch(revealKey, () => {
   if (!selectedItemVisible()) selectedItem.value = null
   nextTick(renderGraph)
@@ -1014,43 +1038,23 @@ onUnmounted(() => {
 .panel-title { font-size: 14px; font-weight: 600; color: #333; white-space: nowrap; }
 .header-tools { pointer-events: auto; display: flex; gap: 10px; align-items: center; }
 
-/* 底部条：视图范围（累计/本章）+ 防剧透揭示控制，横跨整个面板宽度以避免换行 */
-.reveal-footer {
-  position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
-  display: flex; align-items: center; justify-content: center; gap: 16px;
-  padding: 10px 20px; flex-wrap: wrap;
-  background: linear-gradient(to top, rgba(255,255,255,0.95), rgba(255,255,255,0.75) 60%, rgba(255,255,255,0));
-}
-
-/* 视图范围分段控件：累计 / 本章 */
-.scope-seg {
-  display: inline-flex; border: 1px solid #E0E0E0; border-radius: 6px; overflow: hidden;
-  background: #FFF; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-}
-.scope-seg-btn {
-  height: 30px; padding: 0 14px; border: none; background: #FFF;
-  color: #666; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
-}
-.scope-seg-btn + .scope-seg-btn { border-left: 1px solid #E0E0E0; }
-.scope-seg-btn:hover { background: #F5F5F5; color: #000; }
-.scope-seg-btn.active { background: #1A1A1A; color: #FFF; }
-
-/* 防剧透揭示控制（底部条内，风格与工具按钮一致） */
-.reveal-inline {
-  display: flex; align-items: center; gap: 8px;
-  background: #FFF; border: 1px solid #E0E0E0; border-radius: 6px; padding: 4px 10px;
+.graph-scope-control {
+  display: inline-flex;
+  border: 1px solid #DADADA;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #FFF;
   box-shadow: 0 1px 4px rgba(0,0,0,0.04);
 }
-.reveal-inline-label {
-  font-size: 12px; font-weight: 600; color: #444; white-space: nowrap;
+.scope-mode-btn {
+  width: 34px; height: 32px; border: none; border-left: 1px solid #E8E8E8;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #FFF; color: #555; cursor: pointer; font-size: 14px;
+  transition: background 0.15s, color 0.15s;
 }
-.reveal-slider { width: 140px; accent-color: #1A1A1A; cursor: pointer; }
-.reveal-step {
-  width: 22px; height: 22px; border: 1px solid #E0E0E0; border-radius: 5px;
-  background: #FFF; color: #555; cursor: pointer; font-size: 14px; line-height: 1; flex-shrink: 0;
-}
-.reveal-step:hover { background: #F5F5F5; border-color: #CCC; color: #000; }
+.scope-mode-btn:first-child { border-left: none; }
+.scope-mode-btn:hover { background: #F5F5F5; color: #000; }
+.scope-mode-btn.active { background: #1A1A1A; color: #FFF; }
 
 .tool-btn {
   height: 32px; padding: 0 12px;
@@ -1115,21 +1119,6 @@ onUnmounted(() => {
   color: #999; line-height: 1; padding: 0; transition: color 0.2s;
 }
 .detail-close:hover { color: #333; }
-.detail-back-btn {
-  display: inline-flex; align-items: center; gap: 4px;
-  background: #FF4500; color: #fff; border: none;
-  padding: 4px 6px 4px 8px; border-radius: 14px; cursor: pointer;
-  margin-right: 10px; flex-shrink: 0;
-  box-shadow: 0 1px 4px rgba(255,69,0,0.3); transition: background 0.15s, transform 0.1s;
-}
-.detail-back-btn:hover { background: #e63e00; transform: translateY(-1px); }
-.detail-back-btn:active { transform: translateY(0); }
-.detail-back-arrow { font-size: 15px; line-height: 1; font-weight: 700; }
-.detail-back-depth {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  background: rgba(255,255,255,0.28); color: #fff;
-  font-size: 11px; font-weight: 700; line-height: 16px; text-align: center;
-}
 .detail-content { padding: 16px; overflow-y: auto; flex: 1; scroll-behavior: smooth; }
 
 .node-name { font-size: 16px; font-weight: 600; color: #222; margin-bottom: 4px; }
@@ -1145,7 +1134,20 @@ onUnmounted(() => {
 .mention-item:hover { background: #F0F0FF; border-color: #C7C7F0; }
 .mention-ep { display: inline-block; font-size: 10px; color: #7B2D8E; font-weight: 600; margin-right: 6px; }
 .mention-quote { font-size: 12px; color: #444; line-height: 1.5; }
-.mention-jump { font-size: 11px; color: #3498db; font-weight: 500; white-space: nowrap; }
+.mention-jump {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: #3498db; font-weight: 600; white-space: nowrap;
+}
+.book-mentions { margin-top: 14px; border-top: 1px solid #F0F0F0; padding-top: 8px; }
+.mentions-toggle {
+  width: 100%; border: none; background: transparent; padding: 2px 0 8px;
+  display: flex; align-items: center; justify-content: space-between;
+  color: #666; cursor: pointer;
+}
+.mentions-toggle .section-title {
+  margin: 0; display: inline-flex; align-items: center; gap: 6px;
+}
+.mentions-list { margin-top: 2px; }
 
 .edge-relation-header {
   background: #F8F8F8; padding: 12px; border-radius: 8px; margin-bottom: 12px;
@@ -1176,9 +1178,15 @@ onUnmounted(() => {
   background: #F8F8F8; padding: 6px 8px; border-radius: 6px;
 }
 .reel-quote:hover { background: #F0F0FF; }
+.reel-quote-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .graph-building-hint {
-  position: absolute; bottom: 68px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px); color: #fff;
   padding: 10px 20px; border-radius: 30px; font-size: 13px;
   display: flex; align-items: center; gap: 10px; z-index: 100; font-weight: 500;

@@ -121,6 +121,18 @@
 
     <!-- 阅读主界面 -->
     <div v-else class="reader-body" :class="{ 'graph-maximized': graphMaximized }" ref="readerBody">
+      <button
+        v-if="navHistory.length"
+        class="floating-reader-back"
+        @click="goBack"
+        :title="$t('reader.back')"
+        :aria-label="$t('reader.back')"
+      >
+        <FontAwesomeIcon :icon="faArrowLeft" />
+        <span class="floating-back-label">{{ $t('reader.back') }}</span>
+        <span class="floating-back-depth">{{ navHistory.length }}</span>
+      </button>
+
       <!-- 左：书籍面板 -->
       <div v-show="!graphMaximized" class="book-pane" ref="bookPane" :style="{ width: splitPct + '%' }">
         <div class="episode-head">
@@ -234,22 +246,20 @@
       <div class="graph-pane">
         <GraphPanel
           :graph-data="graphData"
-          :current-episode="revealMax"
           :view-episode="viewEpisode"
+          :graph-scope="graphScope"
           :episodes="episodes"
           :loading="graphLoading"
           :extract-progress="extractProgress"
           :seen-edges="seenEdgesArr"
           :select-request="selectRequest"
           :latest-read-episode="latestReadEpisode"
-          :nav-depth="navHistory.length"
           @toggle-maximize="toggleGraphMaximized"
           @jump="onJump"
           @seen-edge="id => markEdgeSeen(id, true)"
           @set-edge-seen="({ id, value }) => markEdgeSeen(id, value)"
-          @set-reveal-max="setRevealMax"
+          @set-graph-scope="setGraphScope"
           @select-change="onGraphSelectChange"
-          @go-back="goBack"
           @retry-extraction="retryExtraction"
         />
       </div>
@@ -261,6 +271,8 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import { faArrowLeft } from '@fortawesome/free-solid-svg-icons'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import GraphPanel from '../components/GraphPanel.vue'
 import {
@@ -268,7 +280,14 @@ import {
 } from '../api/book'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
-import { createMentionIndex, findQuoteRange } from '../utils/readerLinks'
+import {
+  GRAPH_SCOPES,
+  createMentionIndex,
+  findQuoteRange,
+  normalizeGraphScope,
+  scopeAllowsMention,
+  scopeEpisodeLimit,
+} from '../utils/readerLinks'
 import { visibleInterval, isRangeCovered } from '../utils/readProgress'
 import { clampRevealMax, latestReadableEpisode } from '../utils/revealProgress'
 import {
@@ -398,11 +417,18 @@ const goToGraph = (link) => {
 const linkTitle = (link) => `${t('reader.viewInGraph')}: ${link.name}`
 // 节点已读状态由其（已揭示的）关系派生：无关系视为已读；所有关系已读则已读
 const nodeSeen = (nodeId) => {
-  const upto = revealMax.value
   const edges = (graphData.value?.edges || [])
   let has = false
   for (const e of edges) {
-    if ((e.first_episode ?? 0) > upto) continue
+    if (graphScope.value === GRAPH_SCOPES.CURRENT) {
+      if (!(e.mentions || []).some(m => scopeAllowsMention(m.episode, {
+        scope: graphScope.value,
+        viewEpisode: viewEpisode.value,
+        total: episodes.value.length,
+      }))) continue
+    } else if (graphScope.value === GRAPH_SCOPES.UPTO && (e.first_episode ?? 0) > graphScopeLimit.value) {
+      continue
+    }
     if (e.source !== nodeId && e.target !== nodeId) continue
     has = true
     if (!seenEdges.value.has(e.id)) return false
@@ -443,9 +469,19 @@ const extractedUpto = ref(-1)
 const extractRunning = ref(false)
 const extractError = ref('')
 const extractRetrying = ref(false)
-// 正在读的章节图谱还没抽到时，显示"构建中"
-const graphLoading = computed(() => revealMax.value > extractedUpto.value)
-// 上传后即在后台抽取整本书（与阅读位置解耦）；揭示仍由 revealMax 单独控制
+const graphScope = ref(GRAPH_SCOPES.UPTO)
+const graphScopeLimit = computed(() => scopeEpisodeLimit({
+  scope: graphScope.value,
+  viewEpisode: viewEpisode.value,
+  total: episodes.value.length,
+}))
+const setGraphScope = (scope) => {
+  graphScope.value = normalizeGraphScope(scope)
+  if (graphScope.value === GRAPH_SCOPES.ALL) ensureAhead()
+}
+// 当前图谱范围还没抽到时，显示"构建中"
+const graphLoading = computed(() => graphScopeLimit.value > extractedUpto.value)
+// 上传后即在后台抽取整本书（与阅读位置解耦）；图谱显示范围由 graphScope 控制
 const desiredExtractUpto = computed(() => {
   const total = episodes.value.length
   if (!total) return -1
@@ -496,7 +532,11 @@ const highlightRange = computed(() => {
   return findQuoteRange(currentText.value || '', highlightQuote.value)
 })
 
-const graphMentionIndex = computed(() => createMentionIndex(graphData.value, revealMax.value))
+const graphMentionIndex = computed(() => createMentionIndex(graphData.value, {
+  scope: graphScope.value,
+  viewEpisode: viewEpisode.value,
+  total: episodes.value.length,
+}))
 
 // 反向链接：本章正文中与（已揭示的）节点/关系相关联的片段
 const episodeLinks = computed(() => {
@@ -645,11 +685,6 @@ const syncLatestReachedFromProgress = () => {
     total: episodes.value.length,
     extraEpisodes: [revealMax.value],
   })
-}
-
-const setRevealMax = (idx) => {
-  revealMax.value = clampRevealMax(idx, episodes.value.length)
-  if (revealMax.value > extractedUpto.value) ensureAhead()
 }
 
 const setViewEpisode = async (idx) => {
@@ -906,8 +941,8 @@ const selectSearchResult = async (result, index = searchResults.value.indexOf(re
   if (result.kind === 'node' || result.kind === 'edge') {
     searchHighlightRange.value = null
     highlightQuote.value = ''
-    if (Number.isFinite(result.episode) && result.episode > revealMax.value) {
-      setRevealMax(result.episode)
+    if (Number.isFinite(result.episode) && result.episode > graphScopeLimit.value) {
+      setGraphScope(GRAPH_SCOPES.ALL)
       await nextTick()
     }
     selectRequest.value = { type: result.kind, id: result.id, nonce: Date.now() }
@@ -1365,8 +1400,45 @@ onUnmounted(() => {
 }
 
 /* 阅读主体 */
-.reader-body { flex: 1; display: flex; min-height: 0; }
+.reader-body { position: relative; flex: 1; display: flex; min-height: 0; }
 .reader-body.graph-maximized .graph-pane { flex: 1 1 100%; }
+.floating-reader-back {
+  position: absolute; top: 50%; left: 0; z-index: 45;
+  width: 20px; min-height: 46px; padding: 0; border: none; border-radius: 0 14px 14px 0;
+  display: inline-flex; align-items: center; gap: 8px;
+  justify-content: center; overflow: visible;
+  background: rgba(17,17,17,0.62); color: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.14);
+  cursor: pointer; font-size: 11px; font-weight: 700;
+  transform: translateY(-50%);
+  transition: width 0.16s ease, min-height 0.16s ease, background 0.15s, box-shadow 0.15s, border-radius 0.15s;
+}
+.floating-reader-back:hover,
+.floating-reader-back:focus-visible {
+  width: 82px; min-height: 34px; padding: 0 12px; justify-content: flex-start;
+  border-radius: 0 17px 17px 0; font-size: 13px;
+  background: #111; box-shadow: 0 8px 22px rgba(0,0,0,0.22);
+}
+.floating-reader-back:hover { background: #FF4500; }
+.floating-back-label {
+  max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+  transition: max-width 0.16s ease, opacity 0.12s ease;
+}
+.floating-reader-back:hover .floating-back-label,
+.floating-reader-back:focus-visible .floating-back-label {
+  max-width: 42px; opacity: 1;
+}
+.floating-back-depth {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 18px; height: 17px; padding: 0 4px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #FF4500; color: #fff; border: 1px solid #fff;
+  font-size: 10px; line-height: 1; opacity: 0; transform: scale(0.85);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.floating-reader-back:hover .floating-back-depth,
+.floating-reader-back:focus-visible .floating-back-depth {
+  opacity: 1; transform: scale(1);
+}
 .book-pane {
   width: 46%; min-width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
   min-height: 0;
