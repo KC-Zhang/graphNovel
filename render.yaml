@@ -25,7 +25,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://bookmiro-frontend.onrender.com
+        value: https://bookmiro-frontend.onrender.com,https://pageandnode.com,https://www.pageandnode.com
       - key: LLM_API_KEY
         sync: false
       - key: LLM_BASE_URL
