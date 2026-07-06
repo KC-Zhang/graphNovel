@@ -10,7 +10,7 @@ import re
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 
@@ -88,6 +88,55 @@ def _resolve_epub_href(base_dir: str, href: str) -> str:
 def _is_epub_text_item(path: str, media_type: str) -> bool:
     suffix = Path(path).suffix.lower()
     return media_type in {'application/xhtml+xml', 'text/html'} or suffix in {'.xhtml', '.html', '.htm'}
+
+
+_EPUB_MIN_EPISODE_CHARS = 120
+_EPUB_SKIP_TITLES = {
+    "about the author",
+    "acknowledgments",
+    "acknowledgments for the first edition",
+    "also by",
+    "bibliography",
+    "contents",
+    "copyright",
+    "cover",
+    "dedication",
+    "notes",
+    "other books by this author",
+    "table of contents",
+    "title page",
+}
+_EPUB_SKIP_TITLE_PREFIXES = (
+    "about the author",
+    "acknowledgment",
+    "also by ",
+    "bibliography",
+    "copyright",
+    "praise for",
+    "praise forthe",
+    "table of contents",
+)
+
+
+def _normalize_title_key(title: str) -> str:
+    return re.sub(r'\s+', ' ', (title or '').strip()).lower()
+
+
+def _should_skip_epub_episode(title: str, text: str) -> bool:
+    key = _normalize_title_key(title)
+    if key in _EPUB_SKIP_TITLES:
+        return True
+    if any(key.startswith(prefix) for prefix in _EPUB_SKIP_TITLE_PREFIXES):
+        return True
+    return len((text or '').strip()) < _EPUB_MIN_EPISODE_CHARS
+
+
+def _first_useful_text_line(text: str) -> str:
+    for raw in (text or '').splitlines():
+        line = re.sub(r'\s+', ' ', raw.strip())
+        if line:
+            return line[:120]
+    return ''
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -293,6 +342,148 @@ class FileParser:
             for item in manifest.values()
             if _is_epub_text_item(item['path'], item['media_type'])
         ]
+
+    @staticmethod
+    def extract_epub_episodes(file_path: str) -> List[Dict[str, str]]:
+        """
+        从 EPUB 的结构化目录读取章节。
+
+        返回的条目只包含标题和正文；调用方负责按最终合并文本重建
+        start_char/end_char/index。若 EPUB 没有可用的 NCX/导航目录，
+        返回空列表，让上层回退到通用文本分章。
+        """
+        try:
+            with zipfile.ZipFile(file_path) as book:
+                opf_path = FileParser._epub_rootfile_path(book)
+                spine_paths = FileParser._epub_spine_item_paths(book, opf_path)
+                titles_by_path = FileParser._epub_toc_titles_by_path(book, opf_path)
+                if not titles_by_path:
+                    return []
+
+                episodes: List[Dict[str, str]] = []
+                for item_path in spine_paths:
+                    try:
+                        content = book.read(item_path)
+                    except KeyError:
+                        continue
+
+                    text = _html_to_text(content.decode('utf-8', errors='replace'))
+                    title = titles_by_path.get(item_path) or _first_useful_text_line(text)
+                    if not title or _should_skip_epub_episode(title, text):
+                        continue
+                    episodes.append({
+                        "title": title,
+                        "text": text,
+                        "source_path": item_path,
+                    })
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f"无效的 EPUB 文件: {file_path}") from exc
+
+        return episodes if len(episodes) >= 2 else []
+
+    @staticmethod
+    def _epub_toc_titles_by_path(book: zipfile.ZipFile, opf_path: str) -> Dict[str, str]:
+        """从 EPUB2 NCX 或 EPUB3 nav 文档提取整文件目标的目录标题。"""
+        try:
+            package = ET.fromstring(book.read(opf_path))
+        except (KeyError, ET.ParseError):
+            return {}
+
+        opf_dir = posixpath.dirname(opf_path)
+        manifest: Dict[str, Dict[str, str]] = {}
+        ncx_id: Optional[str] = None
+        for elem in package.iter():
+            local = _local_name(elem.tag)
+            if local == 'item':
+                item_id = elem.attrib.get('id')
+                href = elem.attrib.get('href')
+                media_type = elem.attrib.get('media-type', '')
+                properties = elem.attrib.get('properties', '')
+                if item_id and href:
+                    manifest[item_id] = {
+                        'path': _resolve_epub_href(opf_dir, href),
+                        'media_type': media_type,
+                        'properties': properties,
+                    }
+                    if media_type == 'application/x-dtbncx+xml':
+                        ncx_id = item_id
+            elif local == 'spine':
+                ncx_id = elem.attrib.get('toc') or ncx_id
+
+        ncx_item = manifest.get(ncx_id or '')
+        if ncx_item:
+            titles = FileParser._epub_ncx_titles_by_path(book, ncx_item['path'])
+            if titles:
+                return titles
+
+        for item in manifest.values():
+            if 'nav' in item.get('properties', '').split():
+                titles = FileParser._epub_nav_titles_by_path(book, item['path'])
+                if titles:
+                    return titles
+
+        return {}
+
+    @staticmethod
+    def _epub_ncx_titles_by_path(book: zipfile.ZipFile, ncx_path: str) -> Dict[str, str]:
+        try:
+            root = ET.fromstring(book.read(ncx_path))
+        except (KeyError, ET.ParseError):
+            return {}
+
+        ncx_dir = posixpath.dirname(ncx_path)
+        titles: Dict[str, str] = {}
+        for nav_point in root.iter():
+            if _local_name(nav_point.tag) != 'navPoint':
+                continue
+            title = FileParser._epub_nav_label(nav_point)
+            src = ''
+            for child in nav_point:
+                if _local_name(child.tag) == 'content':
+                    src = child.attrib.get('src', '')
+                    break
+            if not title or not src or '#' in src:
+                continue
+            path = _resolve_epub_href(ncx_dir, src)
+            if path and path not in titles:
+                titles[path] = title
+        return titles
+
+    @staticmethod
+    def _epub_nav_label(nav_point: ET.Element) -> str:
+        for child in nav_point:
+            if _local_name(child.tag) != 'navLabel':
+                continue
+            for label_child in child.iter():
+                if _local_name(label_child.tag) == 'text' and label_child.text:
+                    return re.sub(r'\s+', ' ', label_child.text.strip())
+        return ''
+
+    @staticmethod
+    def _epub_nav_titles_by_path(book: zipfile.ZipFile, nav_path: str) -> Dict[str, str]:
+        try:
+            root = ET.fromstring(book.read(nav_path))
+        except (KeyError, ET.ParseError):
+            return {}
+
+        nav_dir = posixpath.dirname(nav_path)
+        titles: Dict[str, str] = {}
+        for elem in root.iter():
+            local = _local_name(elem.tag)
+            epub_type = elem.attrib.get('{http://www.idpf.org/2007/ops}type', elem.attrib.get('epub:type', ''))
+            if local == 'nav' and 'toc' in epub_type.split():
+                for link in elem.iter():
+                    if _local_name(link.tag) != 'a':
+                        continue
+                    href = link.attrib.get('href', '')
+                    title = ''.join(link.itertext()).strip()
+                    title = re.sub(r'\s+', ' ', title)
+                    if title and href and '#' not in href:
+                        path = _resolve_epub_href(nav_dir, href)
+                        if path and path not in titles:
+                            titles[path] = title
+                break
+        return titles
     
     @staticmethod
     def _extract_from_md(file_path: str) -> str:

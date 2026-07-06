@@ -5,6 +5,7 @@ This file is a living index for future agents working in this repo. Update it wh
 ## File Index
 
 - `backend/app/utils/llm_client.py` - OpenAI-compatible chat client, JSON parsing, and optional OpenRouter fallback client.
+- `backend/app/utils/file_parser.py` - PDF/EPUB/Markdown/TXT text extraction, EPUB spine reading, and EPUB TOC-based episode extraction.
 - `backend/app/services/graph_extractor.py` - chapter/chunk entity extraction, entity merge rules, graph construction, and fallback retry use.
 - `backend/app/services/extraction_manager.py` - per-project background extraction worker, failed episode tracking, and retry scheduling.
 - `backend/app/api/graph.py` - upload/project/episode/graph/extraction API routes.
@@ -21,6 +22,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - Chapter review after upload, chapter drawer, chapter scrubber navigation, and graph cumulative/current-chapter modes.
 - Extraction failure display in the graph panel with a user-visible retry button and a retrying state.
 - OpenRouter fallback for failed primary LLM extraction calls using hardcoded `deepseek/deepseek-v3.2`.
+- EPUB uploads can use structured NCX/EPUB navigation to build reader episodes before falling back to flattened-text segmentation.
 
 ## Decisions
 
@@ -34,6 +36,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - Entity extraction chunks are capped at 6000 characters per LLM call.
 - Deterministic fallback segmentation chooses heading runs by `tiktoken` token-span scoring without book-specific TOC rules.
 - Upload/repair use an LLM-guided segmentation wrapper first: the LLM only infers heading/title structure from an early sample, while deterministic code still finds full-book offsets and falls back on failure.
+- EPUB upload prefers whole-document TOC/nav targets and ignores nested `#anchor` section entries plus packaging pages such as Contents, Notes, Bibliography, copyright, and acknowledgments.
 
 ## Problems And Fixes
 
@@ -54,6 +57,9 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - Problem: The Laws of Human Nature LLM structure probe confidently selected the front-matter TOC pattern (`same_line_number_title`) instead of body chapter starts.
   Fix: LLM-guided segmentation logs strategy/validation details, rejects tiny-span TOC-like strategies, and falls back to deterministic standalone-number/title/subtitle segmentation.
+
+- Problem: EPUBs with rich internal TOCs, such as The Black Swan, could be flattened first and then mis-segmented by heading heuristics.
+  Fix: EPUB upload now extracts episodes from NCX/EPUB navigation when available, using spine-ordered whole-document targets and falling back to existing segmentation otherwise.
 
 ## Maintenance Notes
 

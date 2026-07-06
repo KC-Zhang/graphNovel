@@ -48,6 +48,35 @@ def _episode_meta(episodes):
     ]
 
 
+def _build_episodes_from_structured_files(structured_files):
+    """用 EPUB 导航目录返回的章节正文重建完整文本和 offsets。"""
+    full_parts = []
+    episodes = []
+    cursor = 0
+
+    for file_episodes in structured_files:
+        for source in file_episodes:
+            text = TextProcessor.preprocess_text(source.get("text", ""))
+            if not text:
+                continue
+            if full_parts:
+                full_parts.append("\n\n")
+                cursor += 2
+            start = cursor
+            full_parts.append(text)
+            cursor += len(text)
+            episodes.append({
+                "index": len(episodes),
+                "title": TextProcessor.preprocess_text(source.get("title", "")) or f"Section {len(episodes) + 1}",
+                "start_char": start,
+                "end_char": cursor,
+                "char_count": len(text),
+                "text": text,
+            })
+
+    return "".join(full_parts), episodes
+
+
 # ============== 项目（书籍）管理接口 ==============
 
 @graph_bp.route('/project/<project_id>', methods=['GET'])
@@ -205,6 +234,8 @@ def upload_book():
         logger.info(f"创建书籍项目: {project.project_id}")
 
         text_parts = []
+        structured_files = []
+        all_files_structured = True
         for file in uploaded_files:
             if file and file.filename and allowed_file(file.filename):
                 file_info = ProjectManager.save_file_to_project(
@@ -218,6 +249,16 @@ def upload_book():
                 text = TextProcessor.preprocess_text(text)
                 text_parts.append(text)
 
+                ext = os.path.splitext(file.filename)[1].lower()
+                if ext == '.epub':
+                    structured_episodes = FileParser.extract_epub_episodes(file_info["path"])
+                    if structured_episodes:
+                        structured_files.append(structured_episodes)
+                    else:
+                        all_files_structured = False
+                else:
+                    all_files_structured = False
+
         if not text_parts:
             ProjectManager.delete_project(project.project_id)
             return jsonify({
@@ -225,18 +266,22 @@ def upload_book():
                 "error": t('api.noDocProcessed')
             }), 400
 
-        full_text = "\n\n".join(text_parts)
-        project.total_text_length = len(full_text)
-        ProjectManager.save_extracted_text(project.project_id, full_text)
+        if all_files_structured and structured_files:
+            full_text, episodes = _build_episodes_from_structured_files(structured_files)
+            logger.info("使用 EPUB 结构化目录分章: episodes=%s", len(episodes))
+        else:
+            full_text = "\n\n".join(text_parts)
+            episodes = segment_book_hybrid(full_text)
 
-        # 分章
-        episodes = segment_book_hybrid(full_text)
         if not episodes:
             ProjectManager.delete_project(project.project_id)
             return jsonify({
                 "success": False,
                 "error": t('api.noDocProcessed')
             }), 400
+
+        project.total_text_length = len(full_text)
+        ProjectManager.save_extracted_text(project.project_id, full_text)
         ProjectManager.save_episodes(project.project_id, episodes)
 
         # 语言检测
