@@ -26,8 +26,8 @@
     "files": "files"
   },
   "meta": {
-    "title": "BookMiro - Read Books as Graphs",
-    "description": "BookMiro - Turn a book into a knowledge graph and reveal it as you read"
+    "title": "PageAndNode - Read Books as Graphs",
+    "description": "PageAndNode - Turn a book into a knowledge graph and reveal it as you read"
   },
   "nav": {
     "visitGithub": "Visit our Github page"
@@ -38,7 +38,7 @@
     "heroTitle1": "Upload a Book,",
     "heroTitle2": "Read its Graph",
     "heroDesc": "From a single PDF, EPUB, or TXT, {brand} builds a {agentScale} in the book's own language, and reveals it {optimalSolution} as you read — episode by episode, with jump-to-source and effortless relationship browsing.",
-    "heroDescBrand": "BookMiro",
+    "heroDescBrand": "PageAndNode",
     "heroDescAgentScale": "knowledge graph of characters & relations",
     "heroDescOptimalSolution": "\"spoiler-free\"",
     "slogan": "Let the story map itself as you turn the pages",
@@ -117,7 +117,7 @@
     "searchKindEdge": "Edge",
     "searchKindBody": "Text",
     "reviewChapters": "Review detected chapters",
-    "reviewChaptersDesc": "BookMiro found {count} reading sections. Check that these look reasonable before graph extraction starts.",
+    "reviewChaptersDesc": "PageAndNode found {count} reading sections. Check that these look reasonable before graph extraction starts.",
     "continueToReader": "Continue",
     "uploadExpired": "The upload session expired. Choose the files again to continue.",
     "chooseFiles": "Choose files",
@@ -206,7 +206,7 @@
     "setupComplete": "Setup Complete",
     "setupCompleteDesc": "Simulation environment is ready. You can now start the simulation.",
     "roundsConfig": "Simulation Rounds Configuration",
-    "roundsConfigDesc": "BookMiro auto-plans to simulate {hours} real-world hours, each round representing {minutesPerRound} minutes of elapsed time",
+    "roundsConfigDesc": "PageAndNode auto-plans to simulate {hours} real-world hours, each round representing {minutesPerRound} minutes of elapsed time",
     "customToggle": "Custom",
     "roundsUnit": "rounds",
     "estimatedDuration": "For 100 Agents: est. ~{minutes} minutes",
@@ -318,7 +318,7 @@
     "selectChatTarget": "Select chat target",
     "sendSurvey": "Send survey to the world",
     "reportAgentChat": "Report Agent - Chat",
-    "reportAgentDesc": "A conversational version of the report generation agent with access to 4 professional tools and BookMiro's complete memory",
+    "reportAgentDesc": "A conversational version of the report generation agent with access to 4 professional tools and PageAndNode's complete memory",
     "toolInsightForge": "InsightForge Deep Attribution",
     "toolInsightForgeDesc": "Aligns real-world seed data with simulation state, combining Global/Local Memory for cross-temporal deep attribution analysis",
     "toolPanoramaSearch": "PanoramaSearch Full Tracking",

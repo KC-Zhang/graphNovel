@@ -2,10 +2,12 @@
   <div class="home-container">
     <!-- 顶部导航栏 -->
     <nav class="navbar">
-      <div class="nav-brand">BOOKMIRO</div>
+      <div class="nav-brand" aria-label="PageAndNode">
+        <span>PAGE</span><span class="nav-brand-accent">AND</span><span>NODE</span>
+      </div>
       <div class="nav-links">
         <LanguageSwitcher />
-        <a href="https://github.com/KC-Zhang/BookMiro" target="_blank" class="github-link">
+        <a href="https://github.com/KC-Zhang/graphNovel" target="_blank" rel="noopener" class="github-link">
           {{ $t('nav.visitGithub') }} <span class="arrow">↗</span>
         </a>
       </div>
@@ -49,9 +51,14 @@
         </div>
         
         <div class="hero-right">
-          <!-- Logo 区域 -->
+          <!-- Brand mark -->
           <div class="logo-container">
-            <img src="../assets/logo/BookMiro_logo.png" alt="BookMiro Logo" class="hero-logo" />
+            <div class="brand-lockup" aria-label="PageAndNode">
+              <img src="../assets/logo/PageAndNode_mark.png" alt="" class="brand-mark" aria-hidden="true" />
+              <div class="brand-wordmark" aria-hidden="true">
+                <span class="brand-wordmark-bold">PAGE</span><span class="brand-wordmark-accent">AND</span><span class="brand-wordmark-bold">NODE</span>
+              </div>
+            </div>
           </div>
           
           <button class="scroll-down-btn" @click="scrollToBottom">
@@ -383,8 +390,18 @@ const startReading = () => {
 .nav-brand {
   font-family: var(--font-mono);
   font-weight: 800;
-  letter-spacing: 1px;
-  font-size: 1.2rem;
+  letter-spacing: 0.08em;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.28rem;
+  white-space: nowrap;
+}
+
+.nav-brand-accent {
+  color: var(--orange);
+  font-weight: 300;
+  font-style: italic;
 }
 
 .nav-links {
@@ -567,9 +584,44 @@ const startReading = () => {
   padding-right: 40px;
 }
 
-.hero-logo {
-  max-width: 500px; /* 调整logo大小 */
+.brand-lockup {
+  max-width: 520px;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.brand-mark {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.brand-wordmark {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.8rem;
+  color: var(--black);
+  font-family: var(--font-sans);
+  font-size: clamp(2rem, 4.5vw, 3.8rem);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.brand-wordmark-bold {
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.brand-wordmark-accent {
+  color: var(--orange);
+  font-weight: 300;
+  font-style: italic;
+  font-size: 0.85em;
+  transform: translateY(-2px);
 }
 
 .scroll-down-btn {
@@ -1010,7 +1062,7 @@ const startReading = () => {
     margin-bottom: 40px;
   }
   
-  .hero-logo {
+  .brand-lockup {
     max-width: 200px;
     margin-bottom: 20px;
   }

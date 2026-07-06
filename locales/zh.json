@@ -26,8 +26,8 @@
     "files": "个文件"
   },
   "meta": {
-    "title": "BookMiro - 把书读成知识图谱",
-    "description": "BookMiro - 将书籍转化为知识图谱，随阅读进度逐章展开"
+    "title": "PageAndNode - 把书读成知识图谱",
+    "description": "PageAndNode - 将书籍转化为知识图谱，随阅读进度逐章展开"
   },
   "nav": {
     "visitGithub": "访问我们的Github主页"
@@ -38,7 +38,7 @@
     "heroTitle1": "上传一本书",
     "heroTitle2": "读它的图谱",
     "heroDesc": "只需一份 PDF、EPUB 或 TXT，{brand} 就能用与原书相同的语言构建出{agentScale}，并随你阅读{optimalSolution}地逐章展开——支持一键跳回原文、轻松浏览人物关系。",
-    "heroDescBrand": "BookMiro",
+    "heroDescBrand": "PageAndNode",
     "heroDescAgentScale": "人物与关系的知识图谱",
     "heroDescOptimalSolution": "\"无剧透\"",
     "slogan": "让故事随你翻页自行绘成地图",
@@ -117,7 +117,7 @@
     "searchKindEdge": "关系",
     "searchKindBody": "正文",
     "reviewChapters": "确认章节切分",
-    "reviewChaptersDesc": "BookMiro 识别到 {count} 个阅读段落。请先确认切分基本合理，再开始图谱抽取。",
+    "reviewChaptersDesc": "PageAndNode 识别到 {count} 个阅读段落。请先确认切分基本合理，再开始图谱抽取。",
     "continueToReader": "继续阅读",
     "uploadExpired": "上传会话已过期，请重新选择文件继续。",
     "chooseFiles": "重新选文件",
@@ -206,7 +206,7 @@
     "setupComplete": "准备完成",
     "setupCompleteDesc": "模拟环境已准备完成，可以开始运行模拟",
     "roundsConfig": "模拟轮数设定",
-    "roundsConfigDesc": "BookMiro 自动规划推演现实 {hours} 小时，每轮代表现实 {minutesPerRound} 分钟时间流逝",
+    "roundsConfigDesc": "PageAndNode 自动规划推演现实 {hours} 小时，每轮代表现实 {minutesPerRound} 分钟时间流逝",
     "customToggle": "自定义",
     "roundsUnit": "轮",
     "estimatedDuration": "若Agent规模为100：预计耗时约 {minutes} 分钟",
@@ -318,7 +318,7 @@
     "selectChatTarget": "选择对话对象",
     "sendSurvey": "发送问卷调查到世界中",
     "reportAgentChat": "Report Agent - Chat",
-    "reportAgentDesc": "报告生成智能体的快速对话版本，可调用 4 种专业工具，拥有BookMiro的完整记忆",
+    "reportAgentDesc": "报告生成智能体的快速对话版本，可调用 4 种专业工具，拥有 PageAndNode 的完整记忆",
     "toolInsightForge": "InsightForge 深度归因",
     "toolInsightForgeDesc": "对齐现实世界种子数据与模拟环境状态，结合Global/Local Memory机制，提供跨时空的深度归因分析",
     "toolPanoramaSearch": "PanoramaSearch 全景追踪",
