@@ -30,17 +30,17 @@
     "description": "PageAndNode - Turn a book into a knowledge graph and reveal it as you read"
   },
   "nav": {
+    "openLibrary": "Your Library",
     "visitGithub": "Visit our Github page"
   },
   "home": {
     "tagline": "Read Books as Living Knowledge Graphs",
     "version": "/ v0.1-Preview",
-    "heroTitle1": "Upload a Book,",
-    "heroTitle2": "Read its Graph",
-    "heroDesc": "From a single PDF, EPUB, or TXT, {brand} builds a {agentScale} in the book's own language, and reveals it {optimalSolution} as you read — episode by episode, with jump-to-source and effortless relationship browsing.",
-    "heroDescBrand": "PageAndNode",
-    "heroDescAgentScale": "knowledge graph of characters & relations",
-    "heroDescOptimalSolution": "\"spoiler-free\"",
+    "heroTitle1": "A focused reader first,",
+    "heroTitle2": "a character graph second",
+    "heroDesc": "Turn any book into a {optimalSolution} web of {agentScale} — revealed chapter by chapter as you read, with every connection linked to the exact sentence on the page.",
+    "heroDescAgentScale": "characters, relationships, and ideas",
+    "heroDescOptimalSolution": "spoiler-free",
     "slogan": "Let the story map itself as you turn the pages",
     "attribution": "Inspired by {link}'s 红楼梦 (Dream of the Red Chamber) demo",
     "systemStatus": "System Status",
@@ -65,6 +65,8 @@
     "supportedFormats": "Formats: PDF, EPUB, TXT, MD",
     "dragToUpload": "Drag a book to upload",
     "orBrowse": "or click to browse files",
+    "uploadBook": "Upload a book",
+    "openLibrary": "Open library",
     "inputParams": "Book Info",
     "bookNameLabel": "02 / Book Title (optional)",
     "bookNamePlaceholder": "Leave blank to use the file name",
@@ -83,8 +85,8 @@
     "feat4Desc": "Select a character and step through every relationship by scroll or \u2191/\u2193 \u2014 each one highlights on the graph.",
     "feat5Title": "Reading progress tracking",
     "feat5Desc": "Read relationships are remembered and reviewed characters fade out; they light up again when a new relationship appears.",
-    "feat6Title": "Chapter / cumulative view \u00b7 resizable split",
-    "feat6Desc": "Stays fast on big books: switch between the current-chapter and cumulative graph, and drag to resize reader vs graph."
+    "feat6Title": "A focused reader, first",
+    "feat6Desc": "Read the full text in a clean, distraction-free pane with the graph alongside. The relationships that matter are highlighted right where you read, so insight never pulls you out of the story."
   },
   "reader": {
     "backHome": "Library",

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh">
+<html lang="en">
   <head>
     <script>
       (() => {
@@ -14,12 +14,7 @@
           return supportedLocales.find(locale => normalize(locale) === baseLanguage) || ''
         }
         const savedLocale = localStorage.getItem('locale')
-        const browserLocales = Array.isArray(navigator.languages) && navigator.languages.length
-          ? navigator.languages
-          : [navigator.language]
-        document.documentElement.lang = matchLocale(savedLocale)
-          || browserLocales.map(matchLocale).find(Boolean)
-          || 'zh'
+        document.documentElement.lang = matchLocale(savedLocale) || 'en'
       })()
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,8 +23,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="PageAndNode - 把书读成随阅读进度展开的知识图谱" />
-    <title>PageAndNode - 把书读成知识图谱</title>
+    <meta name="description" content="PageAndNode - Turn a book into a knowledge graph and reveal it as you read" />
+    <title>PageAndNode - Read Books as Graphs</title>
   </head>
   <body>
     <div id="app"></div>

@@ -3,6 +3,7 @@
     <!-- 顶部导航栏 -->
     <nav class="navbar">
       <div class="nav-brand" aria-label="PageAndNode">
+        <img src="../assets/logo/PageAndNode_mark.png" alt="" class="brand-icon" aria-hidden="true" />
         <span>PAGE</span><span class="nav-brand-accent">AND</span><span>NODE</span>
       </div>
       <div class="nav-links">
@@ -30,7 +31,6 @@
           <div class="hero-desc">
             <p>
               <i18n-t keypath="home.heroDesc" tag="span">
-                <template #brand><span class="highlight-bold">{{ $t('home.heroDescBrand') }}</span></template>
                 <template #agentScale><span class="highlight-orange">{{ $t('home.heroDescAgentScale') }}</span></template>
                 <template #optimalSolution><span class="highlight-code">{{ $t('home.heroDescOptimalSolution') }}</span></template>
               </i18n-t>
@@ -46,25 +46,33 @@
               </i18n-t>
             </p>
           </div>
+
+          <div class="hero-actions">
+            <button type="button" class="hero-primary-action" @click="scrollToUpload">
+              {{ $t('home.uploadBook') }}
+            </button>
+            <button type="button" class="hero-secondary-action" @click="scrollToLibrary">
+              {{ $t('home.openLibrary') }}
+            </button>
+          </div>
            
           <div class="decoration-square"></div>
         </div>
         
         <div class="hero-right">
-          <!-- Brand mark -->
-          <div class="logo-container">
-            <div class="brand-lockup" aria-label="PageAndNode">
-              <img src="../assets/logo/PageAndNode_mark.png" alt="" class="brand-mark" aria-hidden="true" />
-              <div class="brand-wordmark" aria-hidden="true">
-                <span class="brand-wordmark-bold">PAGE</span><span class="brand-wordmark-accent">AND</span><span class="brand-wordmark-bold">NODE</span>
-              </div>
-            </div>
+          <div class="product-preview">
+            <img
+              src="../assets/screenshots/black-swan-reader.png"
+              alt="PageAndNode reader showing book text beside a knowledge graph"
+              class="product-screenshot"
+            />
           </div>
-          
-          <button class="scroll-down-btn" @click="scrollToBottom">
-            ↓
-          </button>
         </div>
+      </section>
+
+      <!-- 历史项目数据库 -->
+      <section id="library" class="library-section">
+        <HistoryDatabase />
       </section>
 
       <!-- 下半部分：双栏布局 -->
@@ -138,7 +146,7 @@
         </div>
 
         <!-- 右栏：交互控制台 -->
-        <div class="right-panel">
+        <div id="upload" class="right-panel">
           <div class="console-box">
             <!-- 上传区域 -->
             <div class="console-section">
@@ -235,9 +243,6 @@
           </div>
         </div>
       </section>
-
-      <!-- 历史项目数据库 -->
-      <HistoryDatabase />
     </div>
   </div>
 </template>
@@ -327,12 +332,12 @@ const removeFile = (index) => {
   files.value.splice(index, 1)
 }
 
-// 滚动到底部
-const scrollToBottom = () => {
-  window.scrollTo({
-    top: document.body.scrollHeight,
-    behavior: 'smooth'
-  })
+const scrollToLibrary = () => {
+  document.getElementById('library')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+const scrollToUpload = () => {
+  document.getElementById('upload')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 // 开始阅读 - 立即跳转，上传/抽取在阅读页进行
@@ -353,7 +358,7 @@ const startReading = () => {
 
 <style scoped>
 /* 全局变量与重置 */
-:root {
+.home-container {
   --black: #000000;
   --white: #FFFFFF;
   --orange: #FF4500;
@@ -391,11 +396,19 @@ const startReading = () => {
   font-family: var(--font-mono);
   font-weight: 800;
   letter-spacing: 0.08em;
-  font-size: 1rem;
+  font-size: 0.92rem;
   display: flex;
   align-items: center;
-  gap: 0.28rem;
+  gap: 0.22rem;
   white-space: nowrap;
+}
+
+.brand-icon {
+  width: 42px;
+  height: 34px;
+  object-fit: contain;
+  margin-right: 9px;
+  background: var(--white);
 }
 
 .nav-brand-accent {
@@ -434,20 +447,22 @@ const startReading = () => {
 .main-content {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 60px 40px;
+  padding: 46px 40px 60px;
 }
 
 /* Hero 区域 */
 .hero-section {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 80px;
+  gap: 44px;
+  margin-bottom: 24px;
   position: relative;
+  align-items: center;
 }
 
 .hero-left {
-  flex: 1;
-  padding-right: 60px;
+  flex: 0 0 40%;
+  padding-right: 0;
 }
 
 .tag-row {
@@ -495,7 +510,7 @@ const startReading = () => {
   line-height: 1.8;
   color: var(--gray-text);
   max-width: 640px;
-  margin-bottom: 50px;
+  margin-bottom: 28px;
   font-weight: 400;
   text-align: justify;
 }
@@ -558,6 +573,46 @@ const startReading = () => {
   font-weight: 700;
 }
 
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.hero-primary-action,
+.hero-secondary-action {
+  min-height: 46px;
+  padding: 0 20px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hero-primary-action {
+  border: 1px solid var(--black);
+  background: var(--black);
+  color: var(--white);
+}
+
+.hero-primary-action:hover {
+  border-color: var(--orange);
+  background: var(--orange);
+}
+
+.hero-secondary-action {
+  border: 1px solid var(--black);
+  background: var(--white);
+  color: var(--black);
+}
+
+.hero-secondary-action:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
@@ -570,76 +625,25 @@ const startReading = () => {
 }
 
 .hero-right {
-  flex: 0.8;
+  flex: 1;
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-end;
-}
-
-.logo-container {
-  width: 100%;
-  display: flex;
-  justify-content: flex-end;
-  padding-right: 40px;
-}
-
-.brand-lockup {
-  max-width: 520px;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
   align-items: center;
+  min-width: 0;
 }
 
-.brand-mark {
+.product-preview {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--white);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
+}
+
+.product-screenshot {
+  display: block;
   width: 100%;
   height: auto;
-  display: block;
-}
-
-.brand-wordmark {
-  margin-top: 20px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 0.8rem;
-  color: var(--black);
-  font-family: var(--font-sans);
-  font-size: clamp(2rem, 4.5vw, 3.8rem);
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.brand-wordmark-bold {
-  font-weight: 800;
-  letter-spacing: -0.04em;
-}
-
-.brand-wordmark-accent {
-  color: var(--orange);
-  font-weight: 300;
-  font-style: italic;
-  font-size: 0.85em;
-  transform: translateY(-2px);
-}
-
-.scroll-down-btn {
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--border);
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--orange);
-  font-size: 1.2rem;
-  transition: all 0.2s;
-}
-
-.scroll-down-btn:hover {
-  border-color: var(--orange);
 }
 
 /* Dashboard 双栏布局 */
@@ -1043,6 +1047,15 @@ const startReading = () => {
   color: var(--gray-text);
 }
 
+.library-section {
+  scroll-margin-top: 84px;
+}
+
+.library-section :deep(.history-database) {
+  margin-top: 8px;
+  padding-top: 24px;
+}
+
 /* 响应式适配 */
 @media (max-width: 1024px) {
   .dashboard-section {
@@ -1055,20 +1068,49 @@ const startReading = () => {
   
   .hero-section {
     flex-direction: column;
+    align-items: stretch;
   }
   
   .hero-left {
+    flex: none;
     padding-right: 0;
     margin-bottom: 40px;
   }
   
-  .brand-lockup {
-    max-width: 200px;
-    margin-bottom: 20px;
+  .product-preview {
+    max-width: 780px;
   }
 }
 
 @media (max-width: 640px) {
+  .navbar {
+    height: auto;
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .nav-links {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .main-content {
+    padding: 32px 18px 48px;
+  }
+
+  .hero-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .hero-primary-action,
+  .hero-secondary-action {
+    width: 100%;
+  }
+
   .capabilities-grid {
     grid-template-columns: 1fr;
   }

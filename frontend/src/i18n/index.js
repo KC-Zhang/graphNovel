@@ -14,7 +14,7 @@ for (const path in localeFiles) {
   }
 }
 
-const fallbackLocale = 'zh'
+const fallbackLocale = 'en'
 
 const normalizeLocale = value => String(value || '').trim().toLowerCase().replace('_', '-')
 
@@ -30,19 +30,9 @@ const matchAvailableLocale = value => {
   return availableKeys.find(key => normalizeLocale(key) === baseLanguage) || ''
 }
 
-const getBrowserLocale = () => {
-  if (typeof navigator === 'undefined') return ''
-
-  const browserLocales = Array.isArray(navigator.languages) && navigator.languages.length
-    ? navigator.languages
-    : [navigator.language]
-
-  return browserLocales.map(matchAvailableLocale).find(Boolean) || ''
-}
-
 const getInitialLocale = () => {
   const savedLocale = localStorage.getItem('locale')
-  return matchAvailableLocale(savedLocale) || getBrowserLocale() || fallbackLocale
+  return matchAvailableLocale(savedLocale) || fallbackLocale
 }
 
 const initialLocale = getInitialLocale()

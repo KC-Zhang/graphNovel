@@ -59,7 +59,10 @@ This file is a living index for future agents working in this repo. Update it wh
   Fix: LLM-guided segmentation logs strategy/validation details, rejects tiny-span TOC-like strategies, and falls back to deterministic standalone-number/title/subtitle segmentation.
 
 - Problem: EPUBs with rich internal TOCs, such as The Black Swan, could be flattened first and then mis-segmented by heading heuristics.
-  Fix: EPUB upload now extracts episodes from NCX/EPUB navigation when available, using spine-ordered whole-document targets and falling back to existing segmentation otherwise.
+ Fix: EPUB upload now extracts episodes from NCX/EPUB navigation when available, using spine-ordered whole-document targets and falling back to existing segmentation otherwise.
+
+- Problem: the landing page (`Home.vue`) rendered with no orange accents and unstyled (transparent) buttons because its design tokens (`--black`, `--orange`, etc.) were declared in a `:root {}` rule inside `<style scoped>`; Vue rewrites that to `:root[data-v-…]`, which never matches `<html>`, so the variables were undefined.
+ Fix: declare the tokens on `.home-container` (the component root element) inside the scoped block so they resolve and cascade to all descendants, including child components. Do not use `:root` inside scoped styles for shared variables.
 
 ## Maintenance Notes
 

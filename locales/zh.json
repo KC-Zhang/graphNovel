@@ -30,17 +30,17 @@
     "description": "PageAndNode - 将书籍转化为知识图谱，随阅读进度逐章展开"
   },
   "nav": {
+    "openLibrary": "我的书库",
     "visitGithub": "访问我们的Github主页"
   },
   "home": {
     "tagline": "把书读成会生长的知识图谱",
     "version": "/ v0.1-预览版",
-    "heroTitle1": "上传一本书",
-    "heroTitle2": "读它的图谱",
-    "heroDesc": "只需一份 PDF、EPUB 或 TXT，{brand} 就能用与原书相同的语言构建出{agentScale}，并随你阅读{optimalSolution}地逐章展开——支持一键跳回原文、轻松浏览人物关系。",
-    "heroDescBrand": "PageAndNode",
-    "heroDescAgentScale": "人物与关系的知识图谱",
-    "heroDescOptimalSolution": "\"无剧透\"",
+    "heroTitle1": "先是专注的阅读器，",
+    "heroTitle2": "再是无剧透的图谱",
+    "heroDesc": "把任意一本书变成一张{optimalSolution}的{agentScale}之网——随你阅读逐章浮现，每一条关联都链接回书页中的原句。",
+    "heroDescAgentScale": "人物、关系与观点",
+    "heroDescOptimalSolution": "无剧透",
     "slogan": "让故事随你翻页自行绘成地图",
     "attribution": "灵感来自 {link} 的《红楼梦》demo",
     "systemStatus": "系统状态",
@@ -65,6 +65,8 @@
     "supportedFormats": "支持格式: PDF, EPUB, TXT, MD",
     "dragToUpload": "拖拽书籍上传",
     "orBrowse": "或点击浏览文件系统",
+    "uploadBook": "上传一本书",
+    "openLibrary": "打开书库",
     "inputParams": "书籍信息",
     "bookNameLabel": "02 / 书名（可选）",
     "bookNamePlaceholder": "留空则使用文件名",
@@ -83,8 +85,8 @@
     "feat4Desc": "选中人物即可滚动或用 ↑/↓ 逐条浏览其全部关系，每条都会在图谱中高亮。",
     "feat5Title": "阅读进度追踪",
     "feat5Desc": "已读关系自动记录，读过的人物自动淡出；出现新关系时又会重新提醒。",
-    "feat6Title": "本章 / 累计视图 · 可调分栏",
-    "feat6Desc": "大部头也不卡：在\"本章\"与\"累计\"图谱间切换，并可拖拽调整阅读区与图谱的比例。"
+    "feat6Title": "以阅读器为先",
+    "feat6Desc": "在干净、专注的阅读区读完整原文，图谱始终相伴而不打扰；真正重要的关系就在你阅读处高亮呈现，让理解不打断故事。"
   },
   "reader": {
     "backHome": "书库",
