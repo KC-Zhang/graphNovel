@@ -73,7 +73,26 @@
 
     <div class="graph-container" ref="graphContainer">
       <div v-if="hasGraph" class="graph-view">
-        <svg ref="graphSvg" class="graph-svg"></svg>
+        <LargeGraphView
+          v-if="useLargeGraphRenderer"
+          ref="largeGraphView"
+          :nodes="visibleNodes"
+          :edges="visibleEdges"
+          :selected-node-id="selectedNodeId"
+          :selected-edge-id="selectedEdgeId"
+          :type-colors="entityTypes"
+          :seen-node-ids="seenNodeIds"
+          :seen-edge-ids="seenEdges"
+          :focus-unread="focusUnread"
+          :focused-node-ids="focusedNodeIds"
+          :focused-edge-ids="focusedEdgeIds"
+          :show-edge-labels="showEdgeLabels"
+          :aria-label="$t('graph.panelTitle')"
+          @select-node="selectNode"
+          @select-edge="selectEdge"
+          @renderer-error="handleLargeRendererError"
+        />
+        <svg v-else ref="graphSvg" class="graph-svg"></svg>
 
         <div v-if="loading || extractRetrying" class="graph-building-hint">
           <div class="memory-icon-wrapper">
@@ -275,9 +294,15 @@ import {
   faInfinity,
   faLayerGroup,
 } from '@fortawesome/free-solid-svg-icons'
-import { graphDensityMessage, shouldAutoHideEdgeLabels } from '../utils/graphPerformance'
+import {
+  estimateEdgeLabelWidth,
+  graphDensityMessage,
+  shouldAutoHideEdgeLabels,
+} from '../utils/graphPerformance'
 import { GRAPH_SCOPES, normalizeGraphScope, scopeAllowsMention } from '../utils/readerLinks'
 import { colorForEntityType, entityTypeKey, groupEntityTypes } from '../utils/entityTypes'
+import LargeGraphView from './LargeGraphView.vue'
+import { shouldUseLargeGraphRenderer } from '../utils/largeGraph'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
@@ -298,6 +323,8 @@ const emit = defineEmits([
 
 const graphContainer = ref(null)
 const graphSvg = ref(null)
+const largeGraphView = ref(null)
+const largeRendererFailed = ref(false)
 const reelList = ref(null)
 const detailContent = ref(null)
 const selectedItem = ref(null)
@@ -413,6 +440,10 @@ const nodeSeenSet = computed(() => {
 })
 
 const hasGraph = computed(() => visibleNodes.value.length > 0)
+const useLargeGraphRenderer = computed(() => !largeRendererFailed.value && shouldUseLargeGraphRenderer({
+  nodeCount: visibleNodes.value.length,
+  edgeCount: visibleEdges.value.length,
+}))
 const densityMessage = computed(() => graphDensityMessage({
   nodeCount: visibleNodes.value.length,
   edgeCount: visibleEdges.value.length,
@@ -437,6 +468,27 @@ const nodeById = computed(() => {
 })
 
 const entityTypes = computed(() => groupEntityTypes(visibleNodes.value, COLORS))
+const selectedNodeId = computed(() => selectedItem.value?.type === 'node' ? selectedItem.value.node.id : null)
+const selectedEdgeId = computed(() => selectedItem.value?.type === 'edge' ? selectedItem.value.edge.id : null)
+const seenNodeIds = computed(() => [...nodeSeenSet.value])
+const focusedNodeIds = computed(() => {
+  if (!activeType.value) return []
+  return visibleNodes.value
+    .filter(node => entityTypeKey(node.type) === activeType.value)
+    .map(node => node.id)
+})
+const focusedEdgeIds = computed(() => {
+  if (!activeType.value) return []
+  const nodeIds = new Set(focusedNodeIds.value)
+  return visibleEdges.value
+    .filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+    .map(edge => edge.id)
+})
+
+const handleLargeRendererError = () => {
+  largeRendererFailed.value = true
+  nextTick(scheduleGraphRender)
+}
 
 const colorForType = (type) => colorForEntityType(type, entityTypes.value)
 
@@ -525,8 +577,30 @@ let nodeSel = null
 let nodeLabelSel = null
 let linkLabelSel = null
 let linkLabelBgSel = null
+let linkLabelGroupSel = null
 let svgSel = null
 let zoomBehavior = null
+let graphRootSel = null
+let linkGroupSel = null
+let linkLabelLayerSel = null
+let nodeGroupSel = null
+let rendererSvgElement = null
+let resizeObserver = null
+let graphRenderRaf = null
+let graphResizeRaf = null
+let lastZoomTransform = d3.zoomIdentity
+let graphWidth = 1
+let graphHeight = 1
+let positionCacheTick = 0
+let currentNodes = []
+let currentEdges = []
+let pendingCenterRequest = null
+
+// Reuse the same mutable simulation records across graph updates. D3 stores
+// velocity and positions on these objects, so replacing them makes an
+// incremental chapter reveal look (and perform) like a brand-new layout.
+const nodeStateById = new Map()
+const edgeStateById = new Map()
 
 // 当前选中项（及其相邻元素）不受"只看未读"淡化影响，保证正在查看的内容始终可见
 const exemptIds = () => {
@@ -689,13 +763,21 @@ const centerOnPoint = (x, y) => {
 }
 
 const centerOnNode = (id) => {
-  const p = positionCache.get(id)
+  if (useLargeGraphRenderer.value) {
+    largeGraphView.value?.centerOnNode(id)
+    return
+  }
+  const p = nodeStateById.get(id) || positionCache.get(id)
   if (p) centerOnPoint(p.x, p.y)
 }
 
 const centerOnEdge = (edge) => {
-  const a = positionCache.get(edge.source)
-  const b = positionCache.get(edge.target)
+  if (useLargeGraphRenderer.value) {
+    largeGraphView.value?.centerOnEdge(edge.id)
+    return
+  }
+  const a = nodeStateById.get(edge.source) || positionCache.get(edge.source)
+  const b = nodeStateById.get(edge.target) || positionCache.get(edge.target)
   if (a && b) centerOnPoint((a.x + b.x) / 2, (a.y + b.y) / 2)
   else if (a) centerOnPoint(a.x, a.y)
 }
@@ -703,198 +785,290 @@ const centerOnEdge = (edge) => {
 // 外部（阅读面板反向链接）请求选中并居中某节点/关系
 watch(() => props.selectRequest, (req) => {
   if (!req) return
-  if (!req.type || !req.id) { closeDetailPanel(); return }
+  if (!req.type || !req.id) {
+    pendingCenterRequest = null
+    closeDetailPanel()
+    return
+  }
   if (req.type === 'node') {
     const n = visibleNodes.value.find(x => x.id === req.id)
-    if (n) { selectNode(n); nextTick(() => centerOnNode(n.id)) }
+    if (n) {
+      selectNode(n)
+      if (useLargeGraphRenderer.value) nextTick(() => centerOnNode(n.id))
+      else {
+        pendingCenterRequest = { type: 'node', id: n.id }
+        scheduleGraphRender()
+      }
+    }
   } else if (req.type === 'edge') {
     const e = visibleEdges.value.find(x => x.id === req.id)
-    if (e) { selectEdge(e); nextTick(() => centerOnEdge(e)) }
+    if (e) {
+      selectEdge(e)
+      if (useLargeGraphRenderer.value) nextTick(() => centerOnEdge(e))
+      else {
+        pendingCenterRequest = { type: 'edge', edge: e }
+        scheduleGraphRender()
+      }
+    }
   }
 })
 
-const renderGraph = () => {
-  if (!graphSvg.value || !graphContainer.value) return
-  if (simulation) simulation.stop()
+const pointFor = (endpoint) => {
+  if (endpoint && typeof endpoint === 'object') return endpoint
+  return nodeStateById.get(endpoint) || { x: graphWidth / 2, y: graphHeight / 2 }
+}
 
-  const container = graphContainer.value
-  const width = container.clientWidth
-  const height = container.clientHeight
+const getLinkPath = (d) => {
+  const source = pointFor(d.source)
+  const target = pointFor(d.target)
+  const sx = source.x ?? graphWidth / 2
+  const sy = source.y ?? graphHeight / 2
+  const tx = target.x ?? graphWidth / 2
+  const ty = target.y ?? graphHeight / 2
+  if (d.selfLoop) {
+    const r = 28
+    return `M${sx + 8},${sy - 4} A${r},${r} 0 1,1 ${sx + 8},${sy + 4}`
+  }
+  if (d.curvature === 0) return `M${sx},${sy} L${tx},${ty}`
+  const dx = tx - sx
+  const dy = ty - sy
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const off = Math.max(35, dist * 0.3)
+  const cx = (sx + tx) / 2 + (-dy / dist) * d.curvature * off
+  const cy = (sy + ty) / 2 + (dx / dist) * d.curvature * off
+  return `M${sx},${sy} Q${cx},${cy} ${tx},${ty}`
+}
 
-  const svg = d3.select(graphSvg.value)
+const getLinkMidpoint = (d) => {
+  const source = pointFor(d.source)
+  const target = pointFor(d.target)
+  const sx = source.x ?? graphWidth / 2
+  const sy = source.y ?? graphHeight / 2
+  const tx = target.x ?? graphWidth / 2
+  const ty = target.y ?? graphHeight / 2
+  if (d.selfLoop) return { x: sx + 60, y: sy }
+  if (d.curvature === 0) return { x: (sx + tx) / 2, y: (sy + ty) / 2 }
+  const dx = tx - sx
+  const dy = ty - sy
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const off = Math.max(35, dist * 0.3)
+  const cx = (sx + tx) / 2 + (-dy / dist) * d.curvature * off
+  const cy = (sy + ty) / 2 + (dx / dist) * d.curvature * off
+  return {
+    x: 0.25 * sx + 0.5 * cx + 0.25 * tx,
+    y: 0.25 * sy + 0.5 * cy + 0.25 * ty,
+  }
+}
+
+const persistPositions = () => {
+  currentNodes.forEach(n => {
+    if (Number.isFinite(n.x) && Number.isFinite(n.y)) {
+      positionCache.set(n.id, { x: n.x, y: n.y })
+    }
+  })
+}
+
+const updateGraphPositions = () => {
+  if (linkSel) linkSel.attr('d', getLinkPath)
+  if (linkLabelGroupSel) {
+    linkLabelGroupSel.attr('transform', d => {
+      const mid = getLinkMidpoint(d)
+      return `translate(${mid.x},${mid.y})`
+    })
+  }
+  if (nodeSel) nodeSel.attr('cx', d => d.x).attr('cy', d => d.y)
+  if (nodeLabelSel) nodeLabelSel.attr('x', d => d.x).attr('y', d => d.y)
+
+  // The mutable node records already preserve live positions. The separate
+  // cache is only needed when a node leaves and later re-enters the scope, so
+  // copying every node on every animation tick is unnecessary work.
+  positionCacheTick += 1
+  if (positionCacheTick % 12 === 0) persistPositions()
+}
+
+const nodeDragBehavior = d3.drag()
+  .on('start', (event, d) => {
+    d.fx = d.x
+    d.fy = d.y
+    d._sx = event.x
+    d._sy = event.y
+    d._drag = false
+  })
+  .on('drag', (event, d) => {
+    const dist = Math.hypot(event.x - d._sx, event.y - d._sy)
+    if (!d._drag && dist > 3) {
+      d._drag = true
+      simulation?.alphaTarget(0.3).restart()
+    }
+    if (d._drag) {
+      d.fx = event.x
+      d.fy = event.y
+    }
+  })
+  .on('end', (event, d) => {
+    if (d._drag) simulation?.alphaTarget(0)
+    d.fx = null
+    d.fy = null
+    d._drag = false
+    positionCache.set(d.id, { x: d.x, y: d.y })
+  })
+
+const clearRendererReferences = () => {
+  rendererSvgElement = null
+  svgSel = null
+  graphRootSel = null
+  linkGroupSel = null
+  linkLabelLayerSel = null
+  nodeGroupSel = null
+  linkSel = null
+  linkLabelGroupSel = null
+  linkLabelSel = null
+  linkLabelBgSel = null
+  nodeSel = null
+  nodeLabelSel = null
+  zoomBehavior = null
+}
+
+const suspendGraphRenderer = () => {
+  persistPositions()
+  simulation?.stop()
+  clearRendererReferences()
+}
+
+const updateGraphSize = ({ reheat = true } = {}) => {
+  if (!svgSel || !graphContainer.value) return
+  const width = Math.max(1, graphContainer.value.clientWidth)
+  const height = Math.max(1, graphContainer.value.clientHeight)
+  const changed = width !== graphWidth || height !== graphHeight
+  graphWidth = width
+  graphHeight = height
+  svgSel
     .attr('width', width)
     .attr('height', height)
     .attr('viewBox', `0 0 ${width} ${height}`)
-  svg.selectAll('*').remove()
+  zoomBehavior?.extent([[0, 0], [width, height]])
 
-  const rawNodes = visibleNodes.value
-  const rawEdges = visibleEdges.value
-  if (rawNodes.length === 0) return
+  if (!simulation || !changed) return
+  simulation.force('center')?.x(width / 2).y(height / 2)
+  simulation.force('x')?.x(width / 2)
+  simulation.force('y')?.y(height / 2)
+  if (reheat && currentNodes.length) {
+    simulation.alpha(Math.max(simulation.alpha(), 0.12)).restart()
+  }
+}
 
-  const nodes = rawNodes.map(n => {
-    const cached = positionCache.get(n.id)
-    return {
-      id: n.id,
-      name: n.name || '—',
-      type: n.type || '—',
-      data: n,
-      x: cached ? cached.x : width / 2 + (Math.random() - 0.5) * 60,
-      y: cached ? cached.y : height / 2 + (Math.random() - 0.5) * 60
-    }
-  })
+const ensureRenderer = () => {
+  if (!graphSvg.value || !graphContainer.value) return false
+  if (rendererSvgElement === graphSvg.value && svgSel) return true
 
-  // 计算重复边曲率
-  const pairCount = {}
-  rawEdges.forEach(e => {
-    if (e.source === e.target) return
-    const key = [e.source, e.target].sort().join('_')
-    pairCount[key] = (pairCount[key] || 0) + 1
-  })
-  const pairIdx = {}
-  const edges = rawEdges.map(e => {
-    const selfLoop = e.source === e.target
-    let curvature = 0
-    let pairTotal = 1
-    if (!selfLoop) {
-      const key = [e.source, e.target].sort().join('_')
-      pairTotal = pairCount[key]
-      const idx = pairIdx[key] || 0
-      pairIdx[key] = idx + 1
-      if (pairTotal > 1) {
-        curvature = ((idx / (pairTotal - 1)) - 0.5) * 1.5
-        if (e.source > e.target) curvature = -curvature
-      }
-    }
-    return {
-      source: e.source,
-      target: e.target,
-      name: e.label || '—',
-      curvature,
-      selfLoop,
-      pairTotal,
-      data: e
-    }
-  })
+  simulation?.stop()
+  clearRendererReferences()
+  rendererSvgElement = graphSvg.value
+  svgSel = d3.select(graphSvg.value)
+  graphRootSel = svgSel.selectAll('g.graph-root').data([null]).join('g').attr('class', 'graph-root')
+  linkGroupSel = graphRootSel.selectAll('g.links').data([null]).join('g').attr('class', 'links')
+  linkLabelLayerSel = graphRootSel.selectAll('g.link-labels').data([null]).join('g').attr('class', 'link-labels')
+  nodeGroupSel = graphRootSel.selectAll('g.nodes').data([null]).join('g').attr('class', 'nodes')
 
-  simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(edges).id(d => d.id).distance(d => 140 + ((d.pairTotal || 1) - 1) * 40))
+  zoomBehavior = d3.zoom()
+    .scaleExtent([0.1, 4])
+    .on('zoom.graph', (event) => {
+      lastZoomTransform = event.transform
+      graphRootSel?.attr('transform', event.transform)
+    })
+  svgSel.call(zoomBehavior)
+  svgSel.on('click.graph-selection', () => { closeDetailPanel() })
+  updateGraphSize({ reheat: false })
+  if (lastZoomTransform !== d3.zoomIdentity) {
+    svgSel.call(zoomBehavior.transform, lastZoomTransform)
+  }
+  return true
+}
+
+const ensureSimulation = () => {
+  if (simulation) return
+  simulation = d3.forceSimulation([])
+    .force('link', d3.forceLink([]).id(d => d.id)
+      .distance(d => 140 + ((d.pairTotal || 1) - 1) * 40))
     .force('charge', d3.forceManyBody().strength(-380))
-    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('center', d3.forceCenter(graphWidth / 2, graphHeight / 2))
     .force('collide', d3.forceCollide(46))
-    .force('x', d3.forceX(width / 2).strength(0.04))
-    .force('y', d3.forceY(height / 2).strength(0.04))
+    .force('x', d3.forceX(graphWidth / 2).strength(0.04))
+    .force('y', d3.forceY(graphHeight / 2).strength(0.04))
+    .on('tick.graph', updateGraphPositions)
+    .on('end.graph', persistPositions)
+}
 
-  const g = svg.append('g')
-  svgSel = svg
-  zoomBehavior = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on('zoom', (event) => {
-    g.attr('transform', event.transform)
-  })
-  svg.call(zoomBehavior)
+const pairKey = (source, target) => {
+  const a = String(source)
+  const b = String(target)
+  return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`
+}
 
-  const linkGroup = g.append('g').attr('class', 'links')
+const edgeKey = (edge, index) => String(
+  edge.id ?? `${edge.source}\u0000${edge.target}\u0000${edge.label || ''}\u0000${index}`
+)
 
-  const getLinkPath = (d) => {
-    const sx = d.source.x, sy = d.source.y
-    const tx = d.target.x, ty = d.target.y
-    if (d.selfLoop) {
-      const r = 28
-      return `M${sx + 8},${sy - 4} A${r},${r} 0 1,1 ${sx + 8},${sy + 4}`
-    }
-    if (d.curvature === 0) return `M${sx},${sy} L${tx},${ty}`
-    const dx = tx - sx, dy = ty - sy
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1
-    const off = Math.max(35, dist * 0.3)
-    const cx = (sx + tx) / 2 + (-dy / dist) * d.curvature * off
-    const cy = (sy + ty) / 2 + (dx / dist) * d.curvature * off
-    return `M${sx},${sy} Q${cx},${cy} ${tx},${ty}`
+const initialOffset = (id, salt) => {
+  const text = `${id}:${salt}`
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return ((hash >>> 0) / 0xffffffff - 0.5) * 60
+}
+
+const syncEdgeLabels = () => {
+  if (!linkLabelLayerSel) return
+  if (!showEdgeLabels.value) {
+    linkLabelLayerSel.selectAll('g.link-label').remove()
+    linkLabelGroupSel = null
+    linkLabelSel = null
+    linkLabelBgSel = null
+    return
   }
 
-  const getMid = (d) => {
-    const sx = d.source.x, sy = d.source.y
-    const tx = d.target.x, ty = d.target.y
-    if (d.selfLoop) return { x: sx + 60, y: sy }
-    if (d.curvature === 0) return { x: (sx + tx) / 2, y: (sy + ty) / 2 }
-    const dx = tx - sx, dy = ty - sy
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1
-    const off = Math.max(35, dist * 0.3)
-    const cx = (sx + tx) / 2 + (-dy / dist) * d.curvature * off
-    const cy = (sy + ty) / 2 + (dx / dist) * d.curvature * off
-    return { x: 0.25 * sx + 0.5 * cx + 0.25 * tx, y: 0.25 * sy + 0.5 * cy + 0.25 * ty }
-  }
-
-  linkSel = linkGroup.selectAll('path').data(edges).enter().append('path')
-    .attr('stroke', '#C0C0C0')
-    .attr('stroke-width', 1.5)
-    .attr('fill', 'none')
-    .style('cursor', 'pointer')
-    .on('click', (event, d) => { event.stopPropagation(); selectEdge(d.data) })
-
-  linkLabelBgSel = linkGroup.selectAll('rect').data(edges).enter().append('rect')
-    .attr('fill', 'rgba(255,255,255,0.95)').attr('rx', 3).attr('ry', 3)
-    .style('cursor', 'pointer').style('pointer-events', 'all')
-    .style('display', showEdgeLabels.value ? 'block' : 'none')
-    .on('click', (event, d) => { event.stopPropagation(); selectEdge(d.data) })
-
-  linkLabelSel = linkGroup.selectAll('text').data(edges).enter().append('text')
-    .text(d => d.name)
-    .attr('font-size', '9px').attr('fill', '#666')
-    .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-    .style('cursor', 'pointer').style('pointer-events', 'all')
-    .style('font-family', 'system-ui, sans-serif')
-    .style('display', showEdgeLabels.value ? 'block' : 'none')
-    .on('click', (event, d) => { event.stopPropagation(); selectEdge(d.data) })
-
-  const nodeGroup = g.append('g').attr('class', 'nodes')
-  nodeSel = nodeGroup.selectAll('circle').data(nodes).enter().append('circle')
-    .attr('r', 10)
-    .attr('fill', d => colorForType(d.type))
-    .attr('stroke', '#fff').attr('stroke-width', 2.5)
-    .style('cursor', 'pointer')
-    .call(d3.drag()
-      .on('start', (event, d) => { d.fx = d.x; d.fy = d.y; d._sx = event.x; d._sy = event.y; d._drag = false })
-      .on('drag', (event, d) => {
-        const dist = Math.hypot(event.x - d._sx, event.y - d._sy)
-        if (!d._drag && dist > 3) { d._drag = true; simulation.alphaTarget(0.3).restart() }
-        if (d._drag) { d.fx = event.x; d.fy = event.y }
-      })
-      .on('end', (event, d) => { if (d._drag) simulation.alphaTarget(0); d.fx = null; d.fy = null; d._drag = false })
+  linkLabelGroupSel = linkLabelLayerSel.selectAll('g.link-label')
+    .data(currentEdges, d => d.key)
+    .join(
+      enter => {
+        const label = enter.append('g')
+          .attr('class', 'link-label')
+          .style('cursor', 'pointer')
+          .on('click', (event, d) => { event.stopPropagation(); selectEdge(d.data) })
+        label.append('rect')
+          .attr('fill', 'rgba(255,255,255,0.95)')
+          .attr('rx', 3)
+          .attr('ry', 3)
+        label.append('text')
+          .attr('font-size', '9px')
+          .attr('fill', '#666')
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'middle')
+          .style('pointer-events', 'none')
+          .style('font-family', 'system-ui, sans-serif')
+        return label
+      },
+      update => update,
+      exit => exit.remove(),
     )
-    .on('click', (event, d) => { event.stopPropagation(); selectNode(d.data) })
 
-  const nodeLabels = nodeGroup.selectAll('text').data(nodes).enter().append('text')
-    .text(d => d.name.length > 10 ? d.name.slice(0, 10) + '…' : d.name)
-    .attr('font-size', '11px').attr('fill', '#333').attr('font-weight', '500')
-    .attr('dx', 14).attr('dy', 4)
-    .style('pointer-events', 'none').style('font-family', 'system-ui, sans-serif')
-  nodeLabelSel = nodeLabels
-
-  // 应用已读/未读样式
-  applySeenStyles()
-
-  simulation.on('tick', () => {
-    linkSel.attr('d', getLinkPath)
-    if (showEdgeLabels.value) {
-      linkLabelSel.each(function (d) {
-        const mid = getMid(d)
-        d3.select(this).attr('x', mid.x).attr('y', mid.y)
-      })
-      linkLabelBgSel.each(function (d, i) {
-        const mid = getMid(d)
-        const textEl = linkLabelSel.nodes()[i]
-        const bbox = textEl.getBBox()
-        d3.select(this)
-          .attr('x', mid.x - bbox.width / 2 - 4).attr('y', mid.y - bbox.height / 2 - 2)
-          .attr('width', bbox.width + 8).attr('height', bbox.height + 4)
-      })
-    }
-    nodeSel.attr('cx', d => d.x).attr('cy', d => d.y)
-    nodeLabels.attr('x', d => d.x).attr('y', d => d.y)
-    nodes.forEach(n => positionCache.set(n.id, { x: n.x, y: n.y }))
+  linkLabelGroupSel.each(function (d) {
+    const width = estimateEdgeLabelWidth(d.name)
+    const label = d3.select(this)
+    label.select('rect')
+      .attr('x', -width / 2)
+      .attr('y', -7)
+      .attr('width', width)
+      .attr('height', 14)
+    label.select('text').text(d.name)
   })
+  linkLabelBgSel = linkLabelGroupSel.select('rect')
+  linkLabelSel = linkLabelGroupSel.select('text')
+}
 
-  svg.on('click', () => { closeDetailPanel() })
-
-  // 恢复选中高亮
+const restoreGraphHighlight = () => {
   if (selectedItem.value) {
     if (selectedItem.value.type === 'node') {
       const er = nodeEdges.value[activeReelIndex.value]
@@ -904,6 +1078,175 @@ const renderGraph = () => {
     }
   } else if (activeType.value) {
     applyTypeHighlight()
+  }
+}
+
+const renderGraph = () => {
+  if (!ensureRenderer()) {
+    suspendGraphRenderer()
+    return
+  }
+
+  const rawNodes = visibleNodes.value
+  const rawEdges = visibleEdges.value
+  const previousNodeIds = new Set(currentNodes.map(n => n.id))
+  const previousEdgeKeys = new Set(currentEdges.map(e => e.key))
+  const topologyChanged = rawNodes.length !== currentNodes.length
+    || rawEdges.length !== currentEdges.length
+    || rawNodes.some(n => !previousNodeIds.has(n.id))
+    || rawEdges.some((e, index) => {
+      const key = edgeKey(e, index)
+      const existing = edgeStateById.get(key)
+      return !previousEdgeKeys.has(key)
+        || existing?.sourceId !== e.source
+        || existing?.targetId !== e.target
+    })
+
+  const nextNodeIds = new Set()
+  const nodes = rawNodes.map(rawNode => {
+    nextNodeIds.add(rawNode.id)
+    let node = nodeStateById.get(rawNode.id)
+    if (!node) {
+      const cached = positionCache.get(rawNode.id)
+      node = {
+        id: rawNode.id,
+        x: Number.isFinite(cached?.x) ? cached.x : graphWidth / 2 + initialOffset(rawNode.id, 'x'),
+        y: Number.isFinite(cached?.y) ? cached.y : graphHeight / 2 + initialOffset(rawNode.id, 'y'),
+      }
+      nodeStateById.set(rawNode.id, node)
+    }
+    node.name = rawNode.name || '—'
+    node.type = rawNode.type || '—'
+    node.data = rawNode
+    return node
+  })
+  for (const [id, node] of nodeStateById) {
+    if (!nextNodeIds.has(id)) {
+      if (Number.isFinite(node.x) && Number.isFinite(node.y)) {
+        positionCache.set(id, { x: node.x, y: node.y })
+      }
+      nodeStateById.delete(id)
+    }
+  }
+
+  // Compute parallel-edge curvature once per data reconciliation, not per tick.
+  const pairCounts = new Map()
+  rawEdges.forEach(edge => {
+    if (edge.source === edge.target) return
+    const key = pairKey(edge.source, edge.target)
+    pairCounts.set(key, (pairCounts.get(key) || 0) + 1)
+  })
+  const pairIndexes = new Map()
+  const nextEdgeKeys = new Set()
+  const edges = rawEdges.map((rawEdge, index) => {
+    const key = edgeKey(rawEdge, index)
+    nextEdgeKeys.add(key)
+    const selfLoop = rawEdge.source === rawEdge.target
+    let pairTotal = 1
+    let curvature = 0
+    if (!selfLoop) {
+      const keyForPair = pairKey(rawEdge.source, rawEdge.target)
+      pairTotal = pairCounts.get(keyForPair) || 1
+      const pairIndex = pairIndexes.get(keyForPair) || 0
+      pairIndexes.set(keyForPair, pairIndex + 1)
+      if (pairTotal > 1) {
+        curvature = ((pairIndex / (pairTotal - 1)) - 0.5) * 1.5
+        if (String(rawEdge.source) > String(rawEdge.target)) curvature = -curvature
+      }
+    }
+
+    let edge = edgeStateById.get(key)
+    if (!edge) {
+      edge = { key }
+      edgeStateById.set(key, edge)
+    }
+    // forceLink mutates source/target into node objects. Reset them to ids
+    // before handing the updated list back to the force.
+    edge.source = rawEdge.source
+    edge.target = rawEdge.target
+    edge.sourceId = rawEdge.source
+    edge.targetId = rawEdge.target
+    edge.name = rawEdge.label || '—'
+    edge.curvature = curvature
+    edge.selfLoop = selfLoop
+    edge.pairTotal = pairTotal
+    edge.data = rawEdge
+    return edge
+  })
+  for (const key of edgeStateById.keys()) {
+    if (!nextEdgeKeys.has(key)) edgeStateById.delete(key)
+  }
+
+  currentNodes = nodes
+  currentEdges = edges
+  ensureSimulation()
+  simulation.nodes(nodes)
+  simulation.force('link').links(edges)
+  updateGraphSize({ reheat: false })
+
+  linkSel = linkGroupSel.selectAll('path.graph-link')
+    .data(edges, d => d.key)
+    .join(
+      enter => enter.append('path')
+        .attr('class', 'graph-link')
+        .attr('fill', 'none')
+        .style('cursor', 'pointer')
+        .on('click', (event, d) => { event.stopPropagation(); selectEdge(d.data) }),
+      update => update,
+      exit => exit.remove(),
+    )
+    .attr('stroke', '#C0C0C0')
+    .attr('stroke-width', 1.5)
+
+  nodeSel = nodeGroupSel.selectAll('circle.graph-node')
+    .data(nodes, d => d.id)
+    .join(
+      enter => enter.append('circle')
+        .attr('class', 'graph-node')
+        .attr('r', 10)
+        .style('cursor', 'pointer')
+        .on('click', (event, d) => { event.stopPropagation(); selectNode(d.data) }),
+      update => update,
+      exit => exit.remove(),
+    )
+    .attr('fill', d => colorForType(d.type))
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 2.5)
+    .call(nodeDragBehavior)
+
+  nodeLabelSel = nodeGroupSel.selectAll('text.node-label')
+    .data(nodes, d => d.id)
+    .join(
+      enter => enter.append('text')
+        .attr('class', 'node-label')
+        .attr('font-size', '11px')
+        .attr('fill', '#333')
+        .attr('font-weight', '500')
+        .attr('dx', 14)
+        .attr('dy', 4)
+        .style('pointer-events', 'none')
+        .style('font-family', 'system-ui, sans-serif'),
+      update => update,
+      exit => exit.remove(),
+    )
+    .text(d => d.name.length > 10 ? d.name.slice(0, 10) + '…' : d.name)
+
+  syncEdgeLabels()
+  updateGraphPositions()
+  applySeenStyles()
+  restoreGraphHighlight()
+
+  if (pendingCenterRequest) {
+    const request = pendingCenterRequest
+    pendingCenterRequest = null
+    if (request.type === 'node') centerOnNode(request.id)
+    else centerOnEdge(request.edge)
+  }
+
+  if (!nodes.length) {
+    simulation.stop()
+  } else if (topologyChanged) {
+    simulation.alpha(Math.max(simulation.alpha(), previousNodeIds.size ? 0.45 : 0.9)).restart()
   }
 }
 
@@ -979,16 +1322,28 @@ const onKey = (e) => {
 }
 
 // ---------- watchers ----------
-const revealKey = computed(() => `${visibleNodes.value.length}_${visibleEdges.value.length}_${activeGraphScope.value}_${props.viewEpisode ?? 0}`)
-watch(revealKey, () => {
-  if (!selectedItemVisible()) selectedItem.value = null
-  nextTick(renderGraph)
-})
-watch(() => props.graphData, () => { nextTick(renderGraph) }, { deep: false })
+const scheduleGraphRender = () => {
+  nextTick(() => {
+    if (graphRenderRaf !== null) return
+    graphRenderRaf = requestAnimationFrame(() => {
+      graphRenderRaf = null
+      renderGraph()
+    })
+  })
+}
 
-watch(showEdgeLabels, (v) => {
-  if (linkLabelSel) linkLabelSel.style('display', v ? 'block' : 'none')
-  if (linkLabelBgSel) linkLabelBgSel.style('display', v ? 'block' : 'none')
+// visibleNodes/visibleEdges cover data replacement, scope changes and chapter
+// reveal changes. A single animation-frame scheduler coalesces them so one
+// logical update cannot trigger two complete D3 reconciliation passes.
+watch([visibleNodes, visibleEdges], () => {
+  if (!selectedItemVisible()) selectedItem.value = null
+  scheduleGraphRender()
+})
+
+watch(showEdgeLabels, () => {
+  syncEdgeLabels()
+  updateGraphPositions()
+  if (activeType.value) applyTypeHighlight()
 })
 
 watch(() => visibleEdges.value.length, (edgeCount) => {
@@ -1002,7 +1357,14 @@ watch([() => props.seenEdges, focusUnread, () => selectedItem.value], () => {
   applySeenStyles()
 })
 
-const handleResize = () => nextTick(renderGraph)
+const handleResize = () => {
+  if (graphResizeRaf !== null) return
+  graphResizeRaf = requestAnimationFrame(() => {
+    graphResizeRaf = null
+    if (rendererSvgElement === graphSvg.value && svgSel) updateGraphSize()
+    else scheduleGraphRender()
+  })
+}
 
 // 点击弹层外部关闭实体类型图例
 const onDocumentMouseDown = (e) => {
@@ -1015,15 +1377,22 @@ onMounted(() => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', onKey)
   document.addEventListener('mousedown', onDocumentMouseDown)
-  nextTick(renderGraph)
+  if (typeof ResizeObserver !== 'undefined' && graphContainer.value) {
+    resizeObserver = new ResizeObserver(handleResize)
+    resizeObserver.observe(graphContainer.value)
+  }
+  scheduleGraphRender()
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', onKey)
   document.removeEventListener('mousedown', onDocumentMouseDown)
+  resizeObserver?.disconnect()
+  if (graphRenderRaf !== null) cancelAnimationFrame(graphRenderRaf)
+  if (graphResizeRaf !== null) cancelAnimationFrame(graphResizeRaf)
   if (reelScrollRaf) cancelAnimationFrame(reelScrollRaf)
-  if (simulation) simulation.stop()
+  suspendGraphRenderer()
 })
 </script>
 

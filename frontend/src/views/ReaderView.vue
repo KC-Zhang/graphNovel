@@ -316,41 +316,47 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import {
+  ref, shallowRef, markRaw, computed, defineAsyncComponent,
+  onMounted, onUnmounted, nextTick, watch,
+} from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 import { faArrowLeft } from '@fortawesome/free-solid-svg-icons'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
-import GraphPanel from '../components/GraphPanel.vue'
-import PdfPageView from '../components/PdfPageView.vue'
 import {
   uploadBook, ensureExtraction, getExtractStatus, getGraphData, getEpisode, getBook,
-  getPdfSourceUrl, setReadingMode
+  getPdfSourceUrl, searchBook, setReadingMode
 } from '../api/book'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
 import {
   GRAPH_SCOPES,
   createMentionIndex,
+  createQuoteMatcher,
   findQuoteRange,
   normalizeGraphScope,
   scopeAllowsMention,
   scopeEpisodeLimit,
 } from '../utils/readerLinks'
 import { visibleInterval, isRangeCovered } from '../utils/readProgress'
+import { mergeGraphPayload } from '../utils/graphDelta'
 import { readerTextBlocks } from '../utils/readerText'
 import { clampRevealMax, latestReadableEpisode } from '../utils/revealProgress'
 import {
   normalizeSearchQuery,
   orderSearchResults,
-  searchBodyTexts,
   searchGraphData,
 } from '../utils/readerSearch'
 
+const GraphPanel = defineAsyncComponent(() => import('../components/GraphPanel.vue'))
+const PdfPageView = defineAsyncComponent(() => import('../components/PdfPageView.vue'))
+
 const SEARCH_DEBOUNCE_MS = 220
-const SEARCH_BODY_CONCURRENCY = 4
 const MAX_SEARCH_RESULTS = 300
+const EXTRACTION_PREFETCH_EPISODES = 2
+const EPISODE_TEXT_CACHE_LIMIT = 20
 
 const props = defineProps({ projectId: String })
 const router = useRouter()
@@ -555,7 +561,7 @@ const canConfirmReview = computed(() =>
   !(readingMode.value === 'chapter' && ['unavailable', 'unreliable'].includes(chapterDetectionStatus.value))
 )
 
-const graphData = ref({ nodes: [], edges: [] })
+const graphData = shallowRef(markRaw({ nodes: [], edges: [] }))
 
 const episodeTextCache = new Map()
 const currentText = ref('')
@@ -569,13 +575,14 @@ const activeSearchIndex = ref(-1)
 const searchHighlightRange = ref(null)
 let searchTimer = null
 let searchNonce = 0
+let searchAbortController = null
 
 // 增量抽取状态
 const extractedUpto = ref(-1)
 const extractRunning = ref(false)
 const extractError = ref('')
 const extractRetrying = ref(false)
-const graphScope = ref(GRAPH_SCOPES.UPTO)
+const graphScope = ref(GRAPH_SCOPES.CURRENT)
 const graphScopeLimit = computed(() => scopeEpisodeLimit({
   scope: graphScope.value,
   viewEpisode: viewEpisode.value,
@@ -587,11 +594,14 @@ const setGraphScope = (scope) => {
 }
 // 当前图谱范围还没抽到时，显示"构建中"
 const graphLoading = computed(() => graphScopeLimit.value > extractedUpto.value)
-// 上传后即在后台抽取整本书（与阅读位置解耦）；图谱显示范围由 graphScope 控制
+// Keep LLM extraction near the reading position so a new upload does not
+// compete with the reader for server, network, and graph-rendering resources.
 const desiredExtractUpto = computed(() => {
   const total = episodes.value.length
   if (!total) return -1
-  return Math.min(total - 1, Math.max(total - 1, revealMax.value))
+  if (graphScope.value === GRAPH_SCOPES.ALL) return total - 1
+  const reached = Math.max(viewEpisode.value, latestReadEpisode.value, revealMax.value)
+  return Math.min(total - 1, reached + EXTRACTION_PREFETCH_EPISODES)
 })
 const extractProgress = computed(() => {
   const total = episodes.value.length
@@ -643,9 +653,11 @@ const currentHighlightText = computed(() => {
   return highlightQuote.value || ''
 })
 
+// Build once per graph payload. Episode navigation then becomes a Map lookup
+// instead of rescanning every node, edge, and mention.
 const graphMentionIndex = computed(() => createMentionIndex(graphData.value, {
-  scope: graphScope.value,
-  viewEpisode: viewEpisode.value,
+  scope: GRAPH_SCOPES.ALL,
+  viewEpisode: 0,
   total: episodes.value.length,
 }))
 
@@ -655,8 +667,9 @@ const episodeLinks = computed(() => {
   if (!text) return []
   const ep = viewEpisode.value
   const links = []
+  const findInText = createQuoteMatcher(text)
   for (const item of graphMentionIndex.value.get(ep) || []) {
-    const range = findQuoteRange(text, item.quote)
+    const range = findInText(item.quote)
     if (range) {
       links.push({
         start: range.start,
@@ -768,7 +781,8 @@ const confirmChapterReview = async () => {
   }
   phase.value = 'ready'
   await setViewEpisode(0)
-  // 阅读就绪后即在后台抽取整本书的图谱
+  // Prime a small extraction window without making the reader compete with
+  // a full-book background job.
   ensureAhead()
 }
 
@@ -797,13 +811,19 @@ const changeReadingMode = async (mode) => {
 // ---------- 章节文本加载 ----------
 const fetchEpisodeText = async (idx) => {
   if (episodeTextCache.has(idx)) {
-    return episodeTextCache.get(idx)
+    const cached = episodeTextCache.get(idx)
+    episodeTextCache.delete(idx)
+    episodeTextCache.set(idx, cached)
+    return cached
   }
   try {
     const res = await getEpisode(projectId.value, idx)
     if (res.success) {
       const text = res.data.text || ''
       episodeTextCache.set(idx, text)
+      while (episodeTextCache.size > EPISODE_TEXT_CACHE_LIMIT) {
+        episodeTextCache.delete(episodeTextCache.keys().next().value)
+      }
       return text
     }
   } catch (e) {
@@ -1036,31 +1056,26 @@ const runSearch = async () => {
   searchLoading.value = true
   const graphResults = searchGraphData(graphData.value, query)
   searchResults.value = orderSearchResults(graphResults).slice(0, MAX_SEARCH_RESULTS)
-
-  const textsByEpisode = new Map()
-  let nextEpisodeIndex = 0
-  const workerCount = Math.min(SEARCH_BODY_CONCURRENCY, episodes.value.length)
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (nextEpisodeIndex < episodes.value.length && nonce === searchNonce) {
-      const ep = episodes.value[nextEpisodeIndex]
-      const idx = Number.isFinite(ep?.index) ? ep.index : nextEpisodeIndex
-      nextEpisodeIndex += 1
-      const text = await fetchEpisodeText(idx)
-      textsByEpisode.set(idx, text)
+  searchAbortController?.abort()
+  searchAbortController = new AbortController()
+  try {
+    const response = await searchBook(projectId.value, query, {
+      limit: MAX_SEARCH_RESULTS,
+      signal: searchAbortController.signal,
+    })
+    if (nonce !== searchNonce) return
+    const bodyResults = response.data?.results || []
+    searchResults.value = orderSearchResults([...graphResults, ...bodyResults]).slice(0, MAX_SEARCH_RESULTS)
+    activeSearchIndex.value = searchResults.value.length
+      ? Math.min(activeSearchIndex.value, searchResults.value.length - 1)
+      : -1
+  } catch (error) {
+    if (error?.code !== 'ERR_CANCELED' && nonce === searchNonce) {
+      searchResults.value = orderSearchResults(graphResults).slice(0, MAX_SEARCH_RESULTS)
     }
-  })
-
-  await Promise.all(workers)
-  if (nonce !== searchNonce) return
-
-  const bodyResults = searchBodyTexts({
-    episodes: episodes.value,
-    textsByEpisode,
-    query,
-  })
-  searchResults.value = orderSearchResults([...graphResults, ...bodyResults]).slice(0, MAX_SEARCH_RESULTS)
-  activeSearchIndex.value = searchResults.value.length ? Math.min(activeSearchIndex.value, searchResults.value.length - 1) : -1
-  searchLoading.value = false
+  } finally {
+    if (nonce === searchNonce) searchLoading.value = false
+  }
 }
 
 const scheduleSearch = () => {
@@ -1071,6 +1086,8 @@ const scheduleSearch = () => {
 const clearSearch = () => {
   if (searchTimer) { clearTimeout(searchTimer); searchTimer = null }
   searchNonce += 1
+  searchAbortController?.abort()
+  searchAbortController = null
   searchQuery.value = ''
   searchOpen.value = false
   searchLoading.value = false
@@ -1149,11 +1166,22 @@ const onJump = async ({ episode, quote }) => {
 }
 
 // ---------- 图谱加载 ----------
-const loadGraph = async () => {
+let lastGraphEpisode = -1
+
+const loadGraph = async ({ forceFull = false } = {}) => {
   try {
-    const res = await getGraphData(projectId.value)
+    const canUseDelta = !forceFull && lastGraphEpisode >= 0 && graphData.value.nodes.length > 0
+    const res = await getGraphData(projectId.value, {
+      sinceEpisode: canUseDelta ? lastGraphEpisode : null,
+    })
     if (res.success) {
-      graphData.value = res.data || { nodes: [], edges: [] }
+      const payload = res.data || { nodes: [], edges: [] }
+      graphData.value = markRaw(mergeGraphPayload(graphData.value, payload))
+      if (Number.isInteger(payload.revision_episode)) {
+        lastGraphEpisode = payload.mode === 'full'
+          ? payload.revision_episode
+          : Math.max(lastGraphEpisode, payload.revision_episode)
+      }
     }
   } catch (e) {
     // ignore
@@ -1187,7 +1215,7 @@ const pollStatus = async () => {
       lastFailedKey = failedKey
       if (s.extracted_upto > lastLoadedUpto || failedChanged) {
         lastLoadedUpto = Math.max(lastLoadedUpto, s.extracted_upto)
-        await loadGraph()
+        await loadGraph({ forceFull: failedChanged })
       }
       if (s.running || revealMax.value > s.extracted_upto) {
         pollTimer = setTimeout(pollStatus, 1500)
@@ -1263,6 +1291,7 @@ const initExisting = async () => {
   phase.value = 'loading'
   statusMessage.value = t('reader.loading')
   try {
+    lastGraphEpisode = -1
     const res = await getBook(projectId.value)
     if (!res.success) {
       errorText.value = res.error || 'Book not found'
@@ -1294,7 +1323,7 @@ const initExisting = async () => {
     // 立即进入阅读；回到上次阅读位置
     phase.value = 'ready'
     if (episodes.value.length) await setViewEpisode(viewEpisode.value || 0)
-    // 阅读就绪后即在后台抽取整本书的图谱
+    // Resume extraction only around the restored reading position.
     ensureAhead()
   } catch (e) {
     errorText.value = e.message || 'Failed to load book'
@@ -1338,6 +1367,7 @@ const initNew = async () => {
     syncLatestReachedFromProgress()
     extractedUpto.value = -1
     lastLoadedUpto = -1
+    lastGraphEpisode = -1
     // 更新 URL 以便刷新/分享
     router.replace({ name: 'Reader', params: { projectId: projectId.value } })
     phase.value = 'review'
@@ -1362,6 +1392,9 @@ watch(searchQuery, () => {
   activeSearchIndex.value = -1
   searchHighlightRange.value = null
   if (!query) {
+    searchNonce += 1
+    searchAbortController?.abort()
+    searchAbortController = null
     searchOpen.value = false
     searchResults.value = []
     searchLoading.value = false
@@ -1395,6 +1428,7 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', onSearchDocumentMouseDown)
   window.removeEventListener('resize', updateResponsiveLayout)
   if (searchTimer) clearTimeout(searchTimer)
+  searchAbortController?.abort()
   if (pollTimer) clearTimeout(pollTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   if (jumpSettleTimer) clearTimeout(jumpSettleTimer)
@@ -1702,6 +1736,11 @@ onUnmounted(() => {
 }
 .book-text:has(.pdf-page-view) { padding: 8px 12px 24px; background: #e9e9e9; }
 .book-text::-webkit-scrollbar { width: 0; height: 0; }
+.chapter-item,
+.search-result {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 54px;
+}
 
 /* 阅读进度轨（“我读到哪了”，可点击/拖拽滚动） */
 .read-rail {

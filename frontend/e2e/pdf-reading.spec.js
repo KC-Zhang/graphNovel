@@ -27,8 +27,14 @@ test.describe('PDF page reading', () => {
         success: true,
         data: {
           nodes: [
-            { id: 'agentopia', name: 'Agentopia', type: 'Concept', first_episode: 0, mentions: [] },
-            { id: 'llm', name: 'LLM', type: 'concept', first_episode: 0, mentions: [] },
+            {
+              id: 'agentopia', name: 'Agentopia', type: 'Concept', first_episode: 0,
+              mentions: [{ episode: 0, quote: 'Agentopia' }, { episode: 1, quote: 'Agentopia' }],
+            },
+            {
+              id: 'llm', name: 'LLM', type: 'concept', first_episode: 0,
+              mentions: [{ episode: 0, quote: 'LLM' }, { episode: 1, quote: 'LLM' }],
+            },
           ],
           edges: [{
             id: 'agentopia-enhances-llm',
@@ -37,7 +43,10 @@ test.describe('PDF page reading', () => {
             label: 'enhances',
             fact: 'Agentopia enhances underlying LLMs through life reward training.',
             first_episode: 0,
-            mentions: [],
+            mentions: [
+              { episode: 0, quote: 'Agentopia enhances LLM' },
+              { episode: 1, quote: 'Agentopia enhances LLM' },
+            ],
           }],
         },
       }),
@@ -88,7 +97,7 @@ test.describe('PDF page reading', () => {
     await page.locator('.nav-arrow').filter({ hasText: '‹' }).click()
     await expect(page.locator('.read-ring-text')).toHaveText(progressBefore)
 
-    const relationship = page.locator('.links text').filter({ hasText: 'enhances' })
+    const relationship = page.locator('.link-label').filter({ hasText: 'enhances' })
     await expect(relationship).toBeVisible()
     await relationship.click()
     const statement = page.locator('.detail-panel .relationship-statement')

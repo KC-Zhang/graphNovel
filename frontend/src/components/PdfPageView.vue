@@ -58,6 +58,7 @@ let textRenderTask
 let renderToken = 0
 let resizeTimer
 let textSpans = []
+let lastRequestedWidth = 0
 
 const normalizeForMatch = (value) => String(value || '')
   .normalize('NFKC')
@@ -146,6 +147,7 @@ const renderPage = async () => {
 
     const baseViewport = page.getViewport({ scale: 1 })
     const available = Math.max(240, root.value.clientWidth || 640)
+    lastRequestedWidth = available
     const scale = available / baseViewport.width
     const viewport = page.getViewport({ scale })
     const outputScale = Math.min(window.devicePixelRatio || 1, 2)
@@ -191,6 +193,8 @@ watch(() => [props.highlightText, props.links], applyAnnotations, { deep: true }
 
 onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
+    const width = Math.max(240, root.value?.clientWidth || 640)
+    if (Math.abs(width - lastRequestedWidth) < 8) return
     clearTimeout(resizeTimer)
     resizeTimer = setTimeout(renderPage, 100)
   })
@@ -204,6 +208,10 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   renderTask?.cancel()
   textRenderTask?.cancel()
+  for (const documentPromise of documents.values()) {
+    documentPromise.then(document => document.destroy()).catch(() => {})
+  }
+  documents.clear()
 })
 </script>
 

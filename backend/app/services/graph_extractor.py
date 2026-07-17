@@ -166,6 +166,9 @@ class GraphExtractor:
 
         if node_id is not None:
             node = self._nodes[node_id]
+            node["last_episode"] = max(
+                self._latest_item_episode(node), episode_index
+            )
             # 补充别名
             for alias in (aliases or []) + [name]:
                 self._register_alias(alias, node_id)
@@ -188,6 +191,7 @@ class GraphExtractor:
             "aliases": [a for a in (aliases or []) if a and a != name],
             "description": description or "",
             "first_episode": episode_index,
+            "last_episode": episode_index,
             "mentions": [],
         }
         self._nodes[node_id] = node
@@ -234,10 +238,14 @@ class GraphExtractor:
                 "label": label,
                 "fact": fact or "",
                 "first_episode": episode_index,
+                "last_episode": episode_index,
                 "mentions": [],
             }
             self._edges[key] = edge
         else:
+            edge["last_episode"] = max(
+                self._latest_item_episode(edge), episode_index
+            )
             if fact and len(fact) > len(edge.get("fact", "")):
                 edge["fact"] = fact
         quote = (quote or "").strip()
@@ -393,6 +401,21 @@ class GraphExtractor:
                     max_n = max(max_n, int(suffix))
         return max_n
 
+    @staticmethod
+    def _latest_item_episode(item: Dict[str, Any]) -> int:
+        """Recover a revision marker for graphs saved before last_episode existed."""
+        candidates = [item.get("first_episode"), item.get("last_episode")]
+        candidates.extend(
+            mention.get("episode")
+            for mention in (item.get("mentions") or [])
+            if isinstance(mention, dict)
+        )
+        valid = [
+            value for value in candidates
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        return max(valid, default=-1)
+
     def load_graph(self, graph: Optional[Dict[str, Any]]) -> None:
         """
         从已保存的图谱数据恢复抽取状态，使后续章节可以在此基础上继续消解合并。
@@ -407,6 +430,7 @@ class GraphExtractor:
             node.setdefault("mentions", [])
             node.setdefault("description", "")
             node.setdefault("type", "")
+            node["last_episode"] = self._latest_item_episode(node)
             node["type"] = self._canonicalize_type(node.get("type"))
             node_id = node["id"]
             self._nodes[node_id] = node
@@ -417,6 +441,7 @@ class GraphExtractor:
         for edge in edges:
             edge.setdefault("mentions", [])
             edge.setdefault("fact", "")
+            edge["last_episode"] = self._latest_item_episode(edge)
             key = f"{edge['source']}->{edge['target']}:{self._normalize(edge.get('label', ''))}"
             self._edges[key] = edge
 

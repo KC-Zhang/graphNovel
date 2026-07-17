@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "test:bundle": "node scripts/check-bundle-budget.mjs",
     "preview": "vite preview",
     "test": "node --test 'test/*.test.js'",
     "test:e2e": "playwright test"
@@ -16,7 +17,10 @@
     "@fortawesome/vue-fontawesome": "^3.3.0",
     "axios": "^1.14.0",
     "d3": "^7.9.0",
+    "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "pdfjs-dist": "^6.1.200",
+    "sigma": "^3.0.3",
     "vue": "^3.5.24",
     "vue-i18n": "^11.3.0",
     "vue-router": "^4.6.3"

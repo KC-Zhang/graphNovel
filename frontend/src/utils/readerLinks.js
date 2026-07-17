@@ -21,31 +21,40 @@ export const cleanQuote = (quote) => {
     .trim()
 }
 
-export const findQuoteRange = (text, quote) => {
-  const q = cleanQuote(quote)
-  if (!text || !q) return null
+export const createQuoteMatcher = (text) => {
+  const source = String(text || '')
+  const lookups = source ? [false, true].map(stripPunct => ({
+    stripPunct,
+    ...buildNormalized(source, stripPunct),
+  })) : []
 
-  for (const stripPunct of [false, true]) {
-    const { norm, map } = buildNormalized(text, stripPunct)
-    const nq = buildNormalized(q, stripPunct).norm
-    if (!nq) continue
+  return (quote) => {
+    const q = cleanQuote(quote)
+    if (!source || !q) return null
 
-    let idx = norm.indexOf(nq)
-    if (idx !== -1) {
-      return { start: map[idx], end: map[idx + nq.length - 1] + 1 }
-    }
+    for (const { stripPunct, norm, map } of lookups) {
+      const nq = buildNormalized(q, stripPunct).norm
+      if (!nq) continue
 
-    const probeMax = Math.min(nq.length, 16)
-    for (let len = probeMax; len >= 6; len -= 2) {
-      const probe = nq.slice(0, len)
-      idx = norm.indexOf(probe)
+      let idx = norm.indexOf(nq)
       if (idx !== -1) {
-        return { start: map[idx], end: map[idx + len - 1] + 1 }
+        return { start: map[idx], end: map[idx + nq.length - 1] + 1 }
+      }
+
+      const probeMax = Math.min(nq.length, 16)
+      for (let len = probeMax; len >= 6; len -= 2) {
+        const probe = nq.slice(0, len)
+        idx = norm.indexOf(probe)
+        if (idx !== -1) {
+          return { start: map[idx], end: map[idx + len - 1] + 1 }
+        }
       }
     }
+    return null
   }
-  return null
 }
+
+export const findQuoteRange = (text, quote) => createQuoteMatcher(text)(quote)
 
 export const GRAPH_SCOPES = Object.freeze({
   CURRENT: 'current',

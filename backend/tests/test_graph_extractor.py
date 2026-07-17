@@ -177,3 +177,40 @@ def test_entity_type_key_uses_collapsed_whitespace_and_unicode_casefold():
     assert GraphExtractor._normalize_type_key("  Data\t  Model ") == "data model"
     assert GraphExtractor._normalize_type_key("Straße") == "strasse"
     assert GraphExtractor._normalize_type_key("STRASSE") == "strasse"
+
+
+def test_existing_item_tracks_later_metadata_update_without_a_quote():
+    extractor = GraphExtractor(llm_client=UnexpectedFallbackLLM())
+    node_id = extractor._get_or_create_node(
+        name="Alice",
+        episode_index=0,
+        description="Short",
+        quote="Alice arrived.",
+    )
+
+    extractor._get_or_create_node(
+        name="Alice",
+        episode_index=2,
+        description="A longer updated description",
+        quote="",
+    )
+    node = next(node for node in extractor.to_graph()["nodes"] if node["id"] == node_id)
+
+    assert node["last_episode"] == 2
+    assert node["description"] == "A longer updated description"
+    assert node["mentions"] == [{"episode": 0, "quote": "Alice arrived."}]
+
+
+def test_loading_legacy_graph_recovers_last_episode_from_mentions():
+    extractor = GraphExtractor(llm_client=UnexpectedFallbackLLM())
+    extractor.load_graph({
+        "nodes": [{
+            "id": "n1",
+            "name": "Alice",
+            "first_episode": 0,
+            "mentions": [{"episode": 3, "quote": "Alice returned."}],
+        }],
+        "edges": [],
+    })
+
+    assert extractor.to_graph()["nodes"][0]["last_episode"] == 3

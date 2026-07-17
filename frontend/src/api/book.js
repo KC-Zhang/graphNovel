@@ -64,10 +64,21 @@ export function getExtractStatus(projectId) {
  * @param {String} projectId
  * @returns {Promise}
  */
-export function getGraphData(projectId) {
+export function getGraphData(projectId, { sinceEpisode = null } = {}) {
   return service({
     url: `/api/graph/data/${projectId}`,
-    method: 'get'
+    method: 'get',
+    params: Number.isInteger(sinceEpisode) ? { since_episode: sinceEpisode } : undefined,
+  })
+}
+
+/** Search persisted chapter/page text without downloading the whole book. */
+export function searchBook(projectId, query, { limit = 300, signal } = {}) {
+  return service({
+    url: `/api/graph/search/${projectId}`,
+    method: 'get',
+    params: { q: query, limit },
+    signal,
   })
 }
 

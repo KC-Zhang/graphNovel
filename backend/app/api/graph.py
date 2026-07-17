@@ -33,6 +33,133 @@ DEFAULT_PREFETCH = 2
 logger = get_logger('bookmiro.api')
 
 
+def _valid_project_id(project_id):
+    """Reject path-like IDs before they reach the filesystem-backed manager."""
+    return bool(re.fullmatch(r"proj_[0-9a-f]{12}", project_id or ""))
+
+
+def _graph_counts(graph):
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+    return {
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
+
+
+def _full_graph(graph):
+    """Normalize old graph files while preserving additive graph metadata."""
+    data = dict(graph or {})
+    data["nodes"] = data.get("nodes") or []
+    data["edges"] = data.get("edges") or []
+    data.update(_graph_counts(data))
+    return data
+
+
+def _graph_delta(graph, since_episode):
+    """Return graph items touched after an episode, with only new mentions."""
+    def changed(items):
+        result = []
+        for source in items or []:
+            if not isinstance(source, dict):
+                continue
+            mentions = [
+                mention for mention in (source.get("mentions") or [])
+                if (
+                    isinstance(mention, dict)
+                    and isinstance(mention.get("episode"), int)
+                    and not isinstance(mention.get("episode"), bool)
+                    and mention["episode"] > since_episode
+                )
+            ]
+            first_episode = source.get("first_episode", 0)
+            first_episode_is_new = (
+                isinstance(first_episode, int)
+                and not isinstance(first_episode, bool)
+                and first_episode > since_episode
+            )
+            last_episode = source.get("last_episode")
+            item_was_updated = (
+                isinstance(last_episode, int)
+                and not isinstance(last_episode, bool)
+                and last_episode > since_episode
+            )
+            if not mentions and not first_episode_is_new and not item_was_updated:
+                continue
+            item = dict(source)
+            item["mentions"] = mentions
+            result.append(item)
+        return result
+
+    delta = {
+        "nodes": changed(graph.get("nodes")),
+        "edges": changed(graph.get("edges")),
+    }
+    delta.update(_graph_counts(graph))
+    return delta
+
+
+def _search_snippet(text, start, end, radius=60):
+    begin = max(0, start - radius)
+    finish = min(len(text), end + radius)
+    value = re.sub(r"\s+", " ", text[begin:finish]).strip()
+    return ("..." if begin else "") + value + ("..." if finish < len(text) else "")
+
+
+def _search_episode_texts(episodes, query, limit):
+    """Search persisted episode text without sending every chapter to the browser."""
+    if not query or limit <= 0:
+        return []
+
+    # This is a literal pattern: escaping prevents user input from becoming a
+    # regular expression while IGNORECASE keeps match offsets tied to the
+    # original text (lowercasing can expand some Unicode characters).
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    results = []
+    for fallback_index, episode in enumerate(episodes or []):
+        if not isinstance(episode, dict):
+            continue
+        text = str(episode.get("text") or "")
+        episode_index = episode.get("index", fallback_index)
+        if (
+            not isinstance(episode_index, int)
+            or isinstance(episode_index, bool)
+            or episode_index < 0
+        ):
+            episode_index = fallback_index
+
+        # Python offsets count Unicode code points; browser selections count
+        # UTF-16 code units. Convert incrementally so each searched prefix is
+        # encoded at most once, even when a chapter has many matches.
+        codepoint_cursor = 0
+        utf16_cursor = 0
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            utf16_start = utf16_cursor + len(
+                text[codepoint_cursor:start].encode("utf-16-le", "surrogatepass")
+            ) // 2
+            utf16_end = utf16_start + len(
+                text[start:end].encode("utf-16-le", "surrogatepass")
+            ) // 2
+            results.append({
+                "kind": "body",
+                "id": f"body:{episode_index}:{utf16_start}",
+                "title": episode.get("title") or f"#{episode_index + 1}",
+                "subtitle": f"#{episode_index + 1}",
+                "snippet": _search_snippet(text, start, end),
+                "episode": episode_index,
+                "start": utf16_start,
+                "end": utf16_end,
+            })
+            codepoint_cursor = end
+            utf16_cursor = utf16_end
+            if len(results) >= limit:
+                break
+        if len(results) >= limit:
+            break
+    return results
+
+
 def allowed_file(filename: str) -> bool:
     """检查文件扩展名是否允许"""
     if not filename or '.' not in filename:
@@ -741,23 +868,111 @@ def get_graph_data(project_id: str):
     前端按阅读进度过滤，实现逐章展开。
     """
     try:
+        if not _valid_project_id(project_id):
+            return jsonify({
+                "success": False,
+                "error": t('api.projectNotFound', id=project_id)
+            }), 404
+
+        project = ProjectManager.get_project(project_id)
+        revision_episode = project.extracted_upto if project else -1
+        if (
+            not isinstance(revision_episode, int)
+            or isinstance(revision_episode, bool)
+            or revision_episode < -1
+        ):
+            revision_episode = -1
+
+        since_raw = request.args.get("since_episode")
+        since_episode = None
+        if since_raw is not None:
+            try:
+                since_episode = int(since_raw)
+            except (TypeError, ValueError):
+                return jsonify({
+                    "success": False,
+                    "error": "since_episode must be an integer."
+                }), 400
+            if since_episode < -1:
+                return jsonify({
+                    "success": False,
+                    "error": "since_episode must be at least -1."
+                }), 400
+
         graph = ProjectManager.get_graph(project_id)
         if graph is None:
+            data = _full_graph(None)
+            data["mode"] = "full"
+            data["revision_episode"] = revision_episode
             return jsonify({
                 "success": True,
-                "data": {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0}
+                "data": data
             })
+
+        # A client can be ahead after a project reset or graph replacement.
+        # Returning a full snapshot is the only safe way to resynchronize it.
+        if since_episode is None or since_episode > revision_episode:
+            data = _full_graph(graph)
+            data["mode"] = "full"
+        else:
+            data = _graph_delta(graph, since_episode)
+            data["mode"] = "delta"
+            data["since_episode"] = since_episode
+        data["revision_episode"] = revision_episode
 
         return jsonify({
             "success": True,
-            "data": graph
+            "data": data
         })
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to load graph data for %s", project_id)
         return jsonify({
             "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": "Unable to load graph data."
+        }), 500
+
+
+@graph_bp.route('/search/<project_id>', methods=['GET'])
+def search_project(project_id: str):
+    """Search chapter/page text server-side and return a bounded result list."""
+    if not _valid_project_id(project_id):
+        return jsonify({
+            "success": False,
+            "error": t('api.projectNotFound', id=project_id)
+        }), 404
+
+    try:
+        project = ProjectManager.get_project(project_id)
+        if not project:
+            return jsonify({
+                "success": False,
+                "error": t('api.projectNotFound', id=project_id)
+            }), 404
+
+        query = str(request.args.get("q") or "").strip()
+        if not query:
+            return jsonify({"success": True, "data": {"results": []}})
+        if len(query) > 160:
+            return jsonify({"success": False, "error": "Search query is too long."}), 400
+        try:
+            limit = int(request.args.get("limit", 300))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "limit must be an integer."}), 400
+        if limit < 1:
+            return jsonify({"success": False, "error": "limit must be at least 1."}), 400
+        limit = min(limit, 300)
+
+        episodes = ProjectManager.get_episodes(project_id) or []
+        return jsonify({
+            "success": True,
+            "data": {"results": _search_episode_texts(episodes, query, limit)}
+        })
+    except Exception:
+        logger.exception("Failed to search project %s", project_id)
+        return jsonify({
+            "success": False,
+            "error": "Unable to search this book."
         }), 500
 
 

@@ -43,6 +43,7 @@ service.interceptors.response.use(
     return res
   },
   error => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     console.error('Response error:', error)
     
     // 处理超时

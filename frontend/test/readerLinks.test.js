@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   GRAPH_SCOPES,
+  createQuoteMatcher,
   createMentionIndex,
   findQuoteRange,
   scopeEpisodeLimit,
@@ -14,6 +15,13 @@ test('findQuoteRange tolerates whitespace and punctuation differences', () => {
   const range = findQuoteRange(text, 'Never Eat Alone')
 
   assert.deepEqual(text.slice(range.start, range.end), 'Never eat alone')
+})
+
+test('one quote matcher supports multiple mentions in the same chapter', () => {
+  const text = 'Alice arrived first. Later, Bob met Alice.'
+  const findQuote = createQuoteMatcher(text)
+  assert.equal(text.slice(...Object.values(findQuote('Alice arrived'))), 'Alice arrived')
+  assert.equal(text.slice(...Object.values(findQuote('Bob met Alice'))), 'Bob met Alice')
 })
 
 test('createMentionIndex groups only revealed mentions by episode', () => {

@@ -68,6 +68,8 @@
               src="../assets/screenshots/black-swan-reader.png"
               alt="PageAndNode reader showing book text beside a knowledge graph"
               class="product-screenshot"
+              decoding="async"
+              fetchpriority="low"
             />
           </div>
         </div>
@@ -75,7 +77,7 @@
 
       <!-- 历史项目数据库 -->
       <section id="library" class="library-section">
-        <HistoryDatabase />
+        <HistoryDatabase v-if="historyReady" />
       </section>
 
       <!-- 下半部分：双栏布局 -->
@@ -251,12 +253,15 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import HistoryDatabase from '../components/HistoryDatabase.vue'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 
+const HistoryDatabase = defineAsyncComponent(() => import('../components/HistoryDatabase.vue'))
+
 const router = useRouter()
+const historyReady = ref(false)
+let historyIdleHandle = null
 
 // 核心能力展示卡片
 const features = [
@@ -335,7 +340,9 @@ const removeFile = (index) => {
   files.value.splice(index, 1)
 }
 
-const scrollToLibrary = () => {
+const scrollToLibrary = async () => {
+  historyReady.value = true
+  await nextTick()
   document.getElementById('library')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
@@ -357,6 +364,20 @@ const startReading = () => {
     })
   })
 }
+
+onMounted(() => {
+  if ('requestIdleCallback' in window) {
+    historyIdleHandle = window.requestIdleCallback(() => { historyReady.value = true }, { timeout: 1500 })
+  } else {
+    historyIdleHandle = window.setTimeout(() => { historyReady.value = true }, 500)
+  }
+})
+
+onUnmounted(() => {
+  if (historyIdleHandle === null) return
+  if ('cancelIdleCallback' in window) window.cancelIdleCallback(historyIdleHandle)
+  else clearTimeout(historyIdleHandle)
+})
 </script>
 
 <style scoped>
