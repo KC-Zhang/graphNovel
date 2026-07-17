@@ -75,6 +75,7 @@
       <div v-if="hasGraph" class="graph-view">
         <LargeGraphView
           v-if="useLargeGraphRenderer"
+          :key="massiveGraphProfile ? 'massive' : 'standard'"
           ref="largeGraphView"
           :nodes="visibleNodes"
           :edges="visibleEdges"
@@ -82,7 +83,7 @@
           :selected-edge-id="selectedEdgeId"
           :type-colors="entityTypes"
           :seen-node-ids="seenNodeIds"
-          :seen-edge-ids="seenEdges"
+          :seen-edge-ids="focusUnread ? seenEdges : EMPTY_GRAPH_IDS"
           :focus-unread="focusUnread"
           :focused-node-ids="focusedNodeIds"
           :focused-edge-ids="focusedEdgeIds"
@@ -302,7 +303,7 @@ import {
 import { GRAPH_SCOPES, normalizeGraphScope, scopeAllowsMention } from '../utils/readerLinks'
 import { colorForEntityType, entityTypeKey, groupEntityTypes } from '../utils/entityTypes'
 import LargeGraphView from './LargeGraphView.vue'
-import { shouldUseLargeGraphRenderer } from '../utils/largeGraph'
+import { shouldUseLargeGraphRenderer, shouldUseMassiveGraphProfile } from '../utils/largeGraph'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
@@ -342,6 +343,7 @@ const activeType = ref(null)
 const seenEdgeSet = computed(() => new Set(props.seenEdges))
 
 const COLORS = ['#FF6B35', '#004E89', '#7B2D8E', '#1A936F', '#C5283D', '#E9724C', '#3498db', '#9b59b6', '#27ae60', '#f39c12']
+const EMPTY_GRAPH_IDS = Object.freeze([])
 
 // 高亮配色：选中节点/相连边用 ACCENT，正在走查的边用 ACTIVE（更醒目）
 const HL_ACCENT = '#E91E63'
@@ -405,11 +407,14 @@ const visibleNodes = computed(() => {
 })
 
 const visibleEdges = computed(() => {
-  const ids = new Set(visibleNodes.value.map(n => n.id))
   const edges = props.graphData?.edges || []
+  // A persisted full graph already enforces valid endpoints, and the WebGL
+  // synchronizer still validates defensively. Returning the source array here
+  // avoids a redundant node Set plus a full edge copy on All Chapters.
   if (activeGraphScope.value === GRAPH_SCOPES.ALL) {
-    return edges.filter(e => ids.has(e.source) && ids.has(e.target))
+    return edges
   }
+  const ids = new Set(visibleNodes.value.map(n => n.id))
   if (activeGraphScope.value === GRAPH_SCOPES.CURRENT) {
     const ep = props.viewEpisode ?? 0
     return edges.filter(e => mentionedIn(e, ep) && ids.has(e.source) && ids.has(e.target))
@@ -422,25 +427,29 @@ const visibleEdges = computed(() => {
 
 // 节点已读状态：由其（可见）关系派生。无关系视为已读；所有关系已读则已读。
 const nodeSeenSet = computed(() => {
-  const degree = {}
-  const unseen = {}
+  const unseen = new Set()
   visibleEdges.value.forEach(e => {
-    degree[e.source] = (degree[e.source] || 0) + 1
-    degree[e.target] = (degree[e.target] || 0) + 1
     if (!seenEdgeSet.value.has(e.id)) {
-      unseen[e.source] = (unseen[e.source] || 0) + 1
-      unseen[e.target] = (unseen[e.target] || 0) + 1
+      unseen.add(e.source)
+      unseen.add(e.target)
     }
   })
   const seen = new Set()
   visibleNodes.value.forEach(n => {
-    if (!(unseen[n.id] > 0)) seen.add(n.id)
+    if (!unseen.has(n.id)) seen.add(n.id)
   })
   return seen
 })
 
 const hasGraph = computed(() => visibleNodes.value.length > 0)
 const useLargeGraphRenderer = computed(() => !largeRendererFailed.value && shouldUseLargeGraphRenderer({
+  nodeCount: visibleNodes.value.length,
+  edgeCount: visibleEdges.value.length,
+}))
+// Sigma's WebGL contexts and programs are fixed at construction time. Keying
+// the profile makes a standard-large -> massive scope transition remount once
+// instead of retaining native edge picking, z-index buffers and live layout.
+const massiveGraphProfile = computed(() => shouldUseMassiveGraphProfile({
   nodeCount: visibleNodes.value.length,
   edgeCount: visibleEdges.value.length,
 }))
@@ -470,7 +479,12 @@ const nodeById = computed(() => {
 const entityTypes = computed(() => groupEntityTypes(visibleNodes.value, COLORS))
 const selectedNodeId = computed(() => selectedItem.value?.type === 'node' ? selectedItem.value.node.id : null)
 const selectedEdgeId = computed(() => selectedItem.value?.type === 'edge' ? selectedItem.value.edge.id : null)
-const seenNodeIds = computed(() => [...nodeSeenSet.value])
+const seenNodeIds = computed(() => {
+  // Large graphs only use these ids for the optional unread-focus reducer.
+  // Leave the expensive edge-derived set lazy during ordinary exploration.
+  if (useLargeGraphRenderer.value && !focusUnread.value) return EMPTY_GRAPH_IDS
+  return [...nodeSeenSet.value]
+})
 const focusedNodeIds = computed(() => {
   if (!activeType.value) return []
   return visibleNodes.value

@@ -2,9 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  accumulatedWheelZoomRatio,
   colorWithAlpha,
+  findClosestEdgeAtPoint,
+  hydrateGraphologyGraphCooperatively,
   inferLargeGraphLayoutSettings,
+  shouldEnableNativeEdgeEvents,
   shouldUseLargeGraphRenderer,
+  shouldUseMassiveGraphProfile,
   syncGraphologyGraph,
 } from '../src/utils/largeGraph.js'
 
@@ -13,6 +18,9 @@ class FakeGraph {
     this.nodes = new Map()
     this.edges = new Map()
   }
+
+  get order() { return this.nodes.size }
+  get size() { return this.edges.size }
 
   addNode(key, attributes) { this.nodes.set(String(key), { ...attributes }) }
   hasNode(key) { return this.nodes.has(String(key)) }
@@ -59,6 +67,49 @@ test('large graph threshold can be selected by either nodes or edges', () => {
   assert.equal(shouldUseLargeGraphRenderer({ nodeCount: 20, edgeCount: 1000 }), true)
 })
 
+test('dense graphs replace the native edge picking buffer with click-time picking', () => {
+  assert.equal(shouldEnableNativeEdgeEvents({ edgeCount: 5000 }), true)
+  assert.equal(shouldEnableNativeEdgeEvents({ edgeCount: 5001 }), false)
+})
+
+test('massive graphs use the static first-paint profile at either limit', () => {
+  assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 1999, edgeCount: 7999 }), false)
+  assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 2000, edgeCount: 100 }), true)
+  assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 100, edgeCount: 8000 }), true)
+})
+
+test('massive wheel input is accumulated into one bounded camera ratio', () => {
+  assert.ok(accumulatedWheelZoomRatio({ currentRatio: 1, wheelSteps: 3 }) < 1)
+  assert.ok(accumulatedWheelZoomRatio({ currentRatio: 1, wheelSteps: -3 }) > 1)
+  assert.ok(Math.abs(
+    accumulatedWheelZoomRatio({ currentRatio: 1, wheelSteps: 100 }) - (1 / (1.7 ** 4))
+  ) < 1e-12)
+  assert.equal(accumulatedWheelZoomRatio({ currentRatio: 1, wheelSteps: -100 }), 5)
+})
+
+test('click-time edge picking preserves direct selection for dense graphs', () => {
+  const points = new Map([
+    ['a', { x: 10, y: 10 }],
+    ['b', { x: 110, y: 10 }],
+    ['c', { x: 10, y: 80 }],
+  ])
+  const edges = [
+    { id: 'horizontal', source: 'a', target: 'b' },
+    { id: 'vertical', source: 'a', target: 'c' },
+  ]
+
+  assert.equal(findClosestEdgeAtPoint({
+    edges,
+    point: { x: 64, y: 13 },
+    nodePoint: id => points.get(id),
+  })?.id, 'horizontal')
+  assert.equal(findClosestEdgeAtPoint({
+    edges,
+    point: { x: 45, y: 45 },
+    nodePoint: id => points.get(id),
+  }), null)
+})
+
 test('large graph layout settings are inferred without the synchronous layout bundle', () => {
   assert.deepEqual(inferLargeGraphLayoutSettings({ order: 100 }), {
     barnesHutOptimize: false,
@@ -101,6 +152,61 @@ test('incremental sync preserves positions and places a new neighbour nearby', (
   assert.equal(result.addedNodes, 1)
   assert.equal(result.addedEdges, 1)
   assert.equal(result.topologyChanged, true)
+})
+
+test('cooperative hydration yields between bounded slices and preserves the full graph', async () => {
+  const graph = new FakeGraph()
+  const nodes = Array.from({ length: 640 }, (_, index) => ({
+    id: `n${index}`,
+    name: `Node ${index}`,
+  }))
+  const edges = Array.from({ length: 2048 }, (_, index) => ({
+    id: `e${index}`,
+    source: `n${index % nodes.length}`,
+    target: `n${(index * 17 + 1) % nodes.length}`,
+    label: 'relates',
+  }))
+  edges.push({ id: 'invalid', source: 'n0', target: 'missing', label: 'invalid' })
+
+  let clock = 0
+  let yielded = 0
+  const result = await hydrateGraphologyGraphCooperatively(graph, {
+    nodes,
+    edges,
+    nodeAttributes,
+    edgeAttributes,
+    frameBudgetMs: 1,
+    now: () => clock++,
+    yieldControl: async () => { yielded += 1 },
+  })
+
+  assert.equal(graph.order, nodes.length)
+  assert.equal(graph.size, edges.length - 1)
+  assert.equal(result.invalidEdges.length, 1)
+  assert.equal(result.aborted, false)
+  assert.equal(result.yieldCount, yielded)
+  assert.ok(yielded >= 5, `expected multiple cooperative yields, got ${yielded}`)
+})
+
+test('cooperative hydration can abort safely between slices', async () => {
+  const graph = new FakeGraph()
+  const nodes = Array.from({ length: 1000 }, (_, index) => ({ id: `n${index}` }))
+  let clock = 0
+  let abort = false
+
+  const result = await hydrateGraphologyGraphCooperatively(graph, {
+    nodes,
+    edges: [],
+    frameBudgetMs: 1,
+    now: () => clock++,
+    yieldControl: async () => { abort = true },
+    shouldAbort: () => abort,
+  })
+
+  assert.equal(result.aborted, true)
+  assert.ok(graph.order > 0)
+  assert.ok(graph.order < nodes.length)
+  assert.equal(graph.size, 0)
 })
 
 test('incremental sync removes stale data and replaces changed edge endpoints', () => {

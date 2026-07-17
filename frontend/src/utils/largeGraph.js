@@ -1,5 +1,8 @@
 export const LARGE_GRAPH_NODE_THRESHOLD = 500
 export const LARGE_GRAPH_EDGE_THRESHOLD = 1000
+export const NATIVE_EDGE_EVENTS_MAX_EDGES = 5000
+export const MASSIVE_GRAPH_NODE_THRESHOLD = 2000
+export const MASSIVE_GRAPH_EDGE_THRESHOLD = 8000
 
 export const shouldUseLargeGraphRenderer = ({
   nodeCount = 0,
@@ -9,6 +12,83 @@ export const shouldUseLargeGraphRenderer = ({
 } = {}) => (
   Number(nodeCount) >= nodeThreshold || Number(edgeCount) >= edgeThreshold
 )
+
+// Sigma's native edge picking renders a second off-screen WebGL buffer. That
+// is convenient for ordinary graphs, but on software WebGL/headless devices it
+// can dominate the first frame for tens of thousands of edges. Dense graphs
+// use click-time geometric picking instead, keeping direct edge selection
+// without paying the framebuffer cost on every render.
+export const shouldEnableNativeEdgeEvents = ({
+  edgeCount = 0,
+  maxEdges = NATIVE_EDGE_EVENTS_MAX_EDGES,
+} = {}) => Number(edgeCount) <= maxEdges
+
+export const shouldUseMassiveGraphProfile = ({
+  nodeCount = 0,
+  edgeCount = 0,
+  nodeThreshold = MASSIVE_GRAPH_NODE_THRESHOLD,
+  edgeThreshold = MASSIVE_GRAPH_EDGE_THRESHOLD,
+} = {}) => (
+  Number(nodeCount) >= nodeThreshold || Number(edgeCount) >= edgeThreshold
+)
+
+export const accumulatedWheelZoomRatio = ({
+  currentRatio = 1,
+  wheelSteps = 0,
+  zoomingRatio = 1.7,
+  minRatio = 0.04,
+  maxRatio = 5,
+  maxSteps = 4,
+} = {}) => {
+  const ratio = Math.max(Number.EPSILON, Number(currentRatio) || 1)
+  const base = Math.max(1.01, Number(zoomingRatio) || 1.7)
+  const steps = Math.max(-maxSteps, Math.min(maxSteps, Number(wheelSteps) || 0))
+  return Math.max(minRatio, Math.min(maxRatio, ratio * (base ** -steps)))
+}
+
+const pointSegmentDistanceSquared = (point, source, target) => {
+  const dx = target.x - source.x
+  const dy = target.y - source.y
+  if (!dx && !dy) {
+    return (point.x - source.x) ** 2 + (point.y - source.y) ** 2
+  }
+  const t = Math.max(0, Math.min(1,
+    ((point.x - source.x) * dx + (point.y - source.y) * dy) / (dx * dx + dy * dy)
+  ))
+  const x = source.x + t * dx
+  const y = source.y + t * dy
+  return (point.x - x) ** 2 + (point.y - y) ** 2
+}
+
+export const findClosestEdgeAtPoint = ({
+  edges = [],
+  point,
+  nodePoint,
+  maxDistance = 8,
+} = {}) => {
+  if (!point || typeof nodePoint !== 'function') return null
+  const pointCache = new Map()
+  const resolvePoint = id => {
+    const key = graphNodeKey(id)
+    if (!key) return null
+    if (!pointCache.has(key)) pointCache.set(key, nodePoint(key))
+    return pointCache.get(key)
+  }
+  let closest = null
+  let closestDistance = Math.max(0, Number(maxDistance) || 0) ** 2
+
+  for (const edge of edges || []) {
+    const source = resolvePoint(edge?.source)
+    const target = resolvePoint(edge?.target)
+    if (!source || !target) continue
+    const distance = pointSegmentDistanceSquared(point, source, target)
+    if (distance <= closestDistance) {
+      closestDistance = distance
+      closest = edge
+    }
+  }
+  return closest
+}
 
 // Mirrors graphology-layout-forceatlas2's small inferSettings helper without
 // loading the synchronous layout implementation on the graph's critical path.
@@ -93,6 +173,144 @@ const addEdgeWithKey = (graph, key, source, target, attributes) => {
     graph.addDirectedEdgeWithKey(key, source, target, attributes)
   } else {
     graph.addEdgeWithKey(key, source, target, attributes)
+  }
+}
+
+const defaultYieldControl = () => {
+  if (typeof globalThis.scheduler?.yield === 'function') {
+    return globalThis.scheduler.yield()
+  }
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
+
+const monotonicNow = () => globalThis.performance?.now?.() ?? Date.now()
+
+/**
+ * Populate a new Graphology graph without monopolising the browser main
+ * thread. Sigma cannot paint until its graph exists, but a large JSON payload
+ * can still take several frames to convert into Graphology records. Splitting
+ * that conversion into short tasks keeps reader controls, scrolling and pane
+ * resizing responsive while preserving every valid node and edge.
+ *
+ * This is intentionally an initial-hydration helper. Incremental updates use
+ * syncGraphologyGraph so existing layout coordinates continue to win.
+ */
+export const hydrateGraphologyGraphCooperatively = async (graph, {
+  nodes = [],
+  edges = [],
+  nodeAttributes = node => ({ label: node?.name || String(node?.id ?? '') }),
+  edgeAttributes = edge => ({ label: edge?.label || '' }),
+  frameBudgetMs = 8,
+  yieldControl = defaultYieldControl,
+  now = monotonicNow,
+  shouldAbort = () => false,
+} = {}) => {
+  if (!graph) throw new TypeError('A Graphology-compatible graph is required')
+  if ((Number(graph.order) || 0) > 0 || (Number(graph.size) || 0) > 0) {
+    throw new Error('Cooperative hydration requires an empty graph')
+  }
+
+  const budget = Math.max(1, Number(frameBudgetMs) || 8)
+  let sliceStartedAt = now()
+  let yieldCount = 0
+  let aborted = false
+
+  const checkpoint = async () => {
+    if (shouldAbort()) {
+      aborted = true
+      return false
+    }
+    if (now() - sliceStartedAt < budget) return true
+    await yieldControl()
+    yieldCount += 1
+    sliceStartedAt = now()
+    if (shouldAbort()) {
+      aborted = true
+      return false
+    }
+    return true
+  }
+
+  let addedNodes = 0
+  let updatedNodes = 0
+  let addedEdges = 0
+  let updatedEdges = 0
+  let removedEdges = 0
+  const invalidEdges = []
+  let newNodeIndex = 0
+
+  let processed = 0
+  for (const raw of nodes || []) {
+    const key = graphNodeKey(raw)
+    if (key) {
+      const incoming = nodeAttributes(raw, key) || {}
+      if (graph.hasNode(key)) {
+        const current = graph.getNodeAttributes(key)
+        const position = positionFromAttributes(current) ||
+          positionFromAttributes(incoming) ||
+          deterministicPosition(key, newNodeIndex)
+        graph.replaceNodeAttributes(key, { ...incoming, ...position })
+        updatedNodes += 1
+      } else {
+        const position = positionFromAttributes(incoming) || deterministicPosition(key, newNodeIndex)
+        graph.addNode(key, { ...incoming, ...position })
+        newNodeIndex += 1
+        addedNodes += 1
+      }
+    }
+    processed += 1
+    if (processed % 128 === 0 && !await checkpoint()) break
+  }
+
+  const occurrenceBySignature = new Map()
+  if (!aborted) {
+    processed = 0
+    for (const raw of edges || []) {
+      const source = edgeEndpointKey(raw, 'source')
+      const target = edgeEndpointKey(raw, 'target')
+      if (!source || !target || !graph.hasNode(source) || !graph.hasNode(target)) {
+        invalidEdges.push(raw)
+      } else {
+        const signature = `${source}\u0000${target}\u0000${String(raw?.label ?? raw?.name ?? '')}`
+        const occurrence = occurrenceBySignature.get(signature) || 0
+        occurrenceBySignature.set(signature, occurrence + 1)
+        const key = raw?.id === null || raw?.id === undefined || raw?.id === ''
+          ? fallbackEdgeKey(raw, occurrence)
+          : String(raw.id)
+        const incoming = edgeAttributes(raw, key) || {}
+
+        if (graph.hasEdge(key)) {
+          const endpointChanged = String(graph.source(key)) !== source || String(graph.target(key)) !== target
+          if (endpointChanged) {
+            graph.dropEdge(key)
+            removedEdges += 1
+            addEdgeWithKey(graph, key, source, target, incoming)
+            addedEdges += 1
+          } else {
+            graph.replaceEdgeAttributes(key, incoming)
+            updatedEdges += 1
+          }
+        } else {
+          addEdgeWithKey(graph, key, source, target, incoming)
+          addedEdges += 1
+        }
+      }
+      processed += 1
+      if (processed % 256 === 0 && !await checkpoint()) break
+    }
+  }
+
+  return {
+    addedNodes,
+    updatedNodes,
+    removedNodes: 0,
+    addedEdges,
+    updatedEdges,
+    removedEdges,
+    invalidEdges,
+    aborted,
+    yieldCount,
+    topologyChanged: Boolean(addedNodes || addedEdges || removedEdges),
   }
 }
 

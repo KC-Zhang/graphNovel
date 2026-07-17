@@ -8,6 +8,7 @@
     :data-renderer-status="status"
     :data-node-count="nodes.length"
     :data-edge-count="edges.length"
+    :data-layout-mode="graphLayoutMode"
   >
     <div v-if="status === 'error'" class="large-graph-view__message" role="status">
       WebGL graph unavailable
@@ -16,13 +17,18 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { entityTypeKey } from '../utils/entityTypes'
 import {
+  accumulatedWheelZoomRatio,
   colorWithAlpha,
+  findClosestEdgeAtPoint,
   graphNodeKey,
+  hydrateGraphologyGraphCooperatively,
   inferLargeGraphLayoutSettings,
+  shouldEnableNativeEdgeEvents,
+  shouldUseMassiveGraphProfile,
   syncGraphologyGraph,
 } from '../utils/largeGraph'
 
@@ -49,6 +55,13 @@ const emit = defineEmits([
 ])
 const container = ref(null)
 const status = ref('loading')
+const massiveGraph = computed(() => shouldUseMassiveGraphProfile({
+  nodeCount: props.nodes.length,
+  edgeCount: props.edges.length,
+}))
+const graphLayoutMode = computed(() => (
+  massiveGraph.value || !props.layoutEnabled ? 'static' : 'worker'
+))
 
 let graph = null
 let renderer = null
@@ -60,21 +73,32 @@ let layoutStartedAt = 0
 let layoutRemainingMs = 0
 let resizeObserver = null
 let resizeFrame = null
+let resizeTimer = null
 let syncFrame = null
 let layoutBootstrapFrame = null
 let layoutBootstrapTimer = null
 let layoutRuntimePromise = null
 let disposed = false
+let nativeEdgeEventsEnabled = true
+let styleRefreshToken = 0
+let wheelTimer = null
+let wheelSteps = 0
+let wheelPoint = null
 
 const renderState = {
   selectedNode: null,
   selectedEdge: null,
-  nodeColors: new Map(),
-  dimNodes: new Set(),
-  dimEdges: new Set(),
+  seenNodes: new Set(),
+  seenEdges: new Set(),
+  focusedNodes: new Set(),
+  focusedEdges: new Set(),
+  hasExplicitFocus: false,
   accentNodes: new Set(),
   accentEdges: new Set(),
 }
+
+let typeColorSource = null
+let typeColorLookup = new Map()
 
 const asKey = value => graphNodeKey(value)
 const asKeySet = values => new Set(Array.from(values || [], value => String(value)))
@@ -88,20 +112,34 @@ const colorValue = value => {
   return value?.color
 }
 
-const colorForType = (type, rawColor) => {
+const rebuildTypeColorLookup = () => {
   const colors = props.typeColors
-  const key = entityTypeKey(type)
-  let match
+  if (colors === typeColorSource) return
+  typeColorSource = colors
+  const next = new Map()
 
   if (colors instanceof Map) {
-    match = colors.get(key) ?? colors.get(type)
+    for (const [key, value] of colors) {
+      next.set(entityTypeKey(key), colorValue(value))
+    }
   } else if (Array.isArray(colors)) {
-    match = colors.find(item => item?.key === key || entityTypeKey(item?.name) === key)
+    for (const item of colors) {
+      const key = item?.key || entityTypeKey(item?.name)
+      if (key) next.set(key, colorValue(item))
+    }
   } else if (colors && typeof colors === 'object') {
-    match = colors[key] ?? colors[type]
+    for (const [key, value] of Object.entries(colors)) {
+      next.set(entityTypeKey(key), colorValue(value))
+    }
   }
 
-  return colorValue(match) || colorValue(rawColor) || '#7B2D8E'
+  typeColorLookup = next
+}
+
+const colorForType = (type, rawColor) => {
+  rebuildTypeColorLookup()
+  const key = entityTypeKey(type)
+  return typeColorLookup.get(key) || colorValue(rawColor) || '#7B2D8E'
 }
 
 const nodeAttributes = (node, key) => ({
@@ -115,7 +153,7 @@ const edgeAttributes = edge => ({
   label: edge?.label || edge?.name || '',
   color: edge?.color || '#B8B8B8',
   size: finiteSize(edge?.size, 1.1, 0.25, 8),
-  type: edge?.type || 'arrow',
+  type: massiveGraph.value ? 'line' : (edge?.type || 'arrow'),
   rawData: edge,
 })
 
@@ -124,8 +162,10 @@ const updateRenderState = () => {
 
   const selectedNode = asKey(props.selectedNodeId)
   const selectedEdge = asKey(props.selectedEdgeId)
-  const seenNodes = asKeySet(props.seenNodeIds)
-  const seenEdges = asKeySet(props.seenEdgeIds)
+  // Read-state sets are irrelevant until "focus unread" is enabled. Avoid
+  // copying thousands of ids on initial All Chapters render.
+  const seenNodes = props.focusUnread ? asKeySet(props.seenNodeIds) : new Set()
+  const seenEdges = props.focusUnread ? asKeySet(props.seenEdgeIds) : new Set()
   const focusedNodes = asKeySet(props.focusedNodeIds)
   const focusedEdges = asKeySet(props.focusedEdgeIds)
   const hasExplicitFocus = focusedNodes.size > 0 || focusedEdges.size > 0
@@ -146,46 +186,30 @@ const updateRenderState = () => {
     exemptNodes.add(String(graph.target(selectedEdge)))
   }
 
-  const nodeColors = new Map()
-  const dimNodes = new Set()
-  const dimEdges = new Set()
-  const accentNodes = new Set(exemptNodes)
-  const accentEdges = new Set(exemptEdges)
-
-  graph.forEachNode((node, attributes) => {
-    const key = String(node)
-    const raw = attributes.rawData || {}
-    nodeColors.set(key, colorForType(raw.type, raw.color || attributes.color))
-    const outsideFocus = hasExplicitFocus && !focusedNodes.has(key) && !exemptNodes.has(key)
-    const readAndFiltered = props.focusUnread && seenNodes.has(key) && !exemptNodes.has(key)
-    if (outsideFocus || readAndFiltered) dimNodes.add(key)
-  })
-
-  graph.forEachEdge((edge, _attributes, source, target) => {
-    const key = String(edge)
-    const sourceKey = String(source)
-    const targetKey = String(target)
-    const inFocusedNodes = focusedNodes.has(sourceKey) && focusedNodes.has(targetKey)
-    const outsideFocus = hasExplicitFocus && !focusedEdges.has(key) && !inFocusedNodes && !exemptEdges.has(key)
-    const readAndFiltered = props.focusUnread && seenEdges.has(key) && !exemptEdges.has(key)
-    if (outsideFocus || readAndFiltered) dimEdges.add(key)
-  })
-
   renderState.selectedNode = selectedNode
   renderState.selectedEdge = selectedEdge
-  renderState.nodeColors = nodeColors
-  renderState.dimNodes = dimNodes
-  renderState.dimEdges = dimEdges
-  renderState.accentNodes = accentNodes
-  renderState.accentEdges = accentEdges
+  renderState.seenNodes = seenNodes
+  renderState.seenEdges = seenEdges
+  renderState.focusedNodes = focusedNodes
+  renderState.focusedEdges = focusedEdges
+  renderState.hasExplicitFocus = hasExplicitFocus
+  renderState.accentNodes = exemptNodes
+  renderState.accentEdges = exemptEdges
 }
 
 const nodeReducer = (node, data) => {
   const key = String(node)
   const selected = key === renderState.selectedNode
   const endpointOfSelection = !selected && renderState.accentNodes.has(key)
-  const dimmed = renderState.dimNodes.has(key)
-  const color = renderState.nodeColors.get(key) || data.color
+  const outsideFocus = renderState.hasExplicitFocus &&
+    !renderState.focusedNodes.has(key) && !renderState.accentNodes.has(key)
+  const readAndFiltered = props.focusUnread &&
+    renderState.seenNodes.has(key) && !renderState.accentNodes.has(key)
+  const dimmed = outsideFocus || readAndFiltered
+  // The synchronized graph attribute already contains the resolved type
+  // color. Re-normalizing the entity type inside Sigma's reducer would repeat
+  // that string work for every node on every worker-driven render frame.
+  const color = data.color
 
   return {
     ...data,
@@ -201,10 +225,18 @@ const edgeReducer = (edge, data) => {
   const key = String(edge)
   const selected = key === renderState.selectedEdge
   const related = !selected && renderState.accentEdges.has(key)
-  const dimmed = renderState.dimEdges.has(key)
+  const raw = data.rawData || {}
+  const source = asKey(raw.source)
+  const target = asKey(raw.target)
+  const inFocusedNodes = renderState.focusedNodes.has(source) && renderState.focusedNodes.has(target)
+  const outsideFocus = renderState.hasExplicitFocus &&
+    !renderState.focusedEdges.has(key) && !inFocusedNodes && !renderState.accentEdges.has(key)
+  const readAndFiltered = props.focusUnread &&
+    renderState.seenEdges.has(key) && !renderState.accentEdges.has(key)
+  const dimmed = outsideFocus || readAndFiltered
   return {
     ...data,
-    label: props.showEdgeLabels ? data.label : '',
+    label: props.showEdgeLabels && !massiveGraph.value ? data.label : '',
     color: selected ? '#FF4500' : related ? '#E91E63' : (
       dimmed ? colorWithAlpha(data.color, 0.1) : data.color
     ),
@@ -214,10 +246,83 @@ const edgeReducer = (edge, data) => {
   }
 }
 
+const needsInteractiveReducers = () => Boolean(
+  renderState.selectedNode || renderState.selectedEdge || props.focusUnread ||
+  renderState.hasExplicitFocus
+)
+
+const yieldMainThread = () => {
+  if (typeof globalThis.scheduler?.yield === 'function') return globalThis.scheduler.yield()
+  return new Promise(resolve => window.setTimeout(resolve, 0))
+}
+
+const refreshMassiveGraphStyles = async (token) => {
+  // Make the selected neighbourhood visible first, then repaint the rest in
+  // bounded chunks. Sigma's partial skip-indexation path updates existing GPU
+  // slots and avoids rebuilding the complete 25k+ item index for a toolbar
+  // click such as "focus unread".
+  const priorityNodes = [...renderState.accentNodes]
+  if (renderState.selectedNode) priorityNodes.push(renderState.selectedNode)
+  const priorityEdges = [...renderState.accentEdges]
+  if (renderState.selectedEdge) priorityEdges.push(renderState.selectedEdge)
+  const validPriorityNodes = priorityNodes.filter(key => graph?.hasNode(key))
+  const validPriorityEdges = priorityEdges.filter(key => graph?.hasEdge(key))
+  if (validPriorityNodes.length || validPriorityEdges.length) {
+    renderer?.refresh({
+      partialGraph: { nodes: validPriorityNodes, edges: validPriorityEdges },
+      skipIndexation: true,
+      schedule: true,
+    })
+  }
+
+  await yieldMainThread()
+  if (disposed || token !== styleRefreshToken || !renderer || !graph) return
+  const nodeKeys = graph.nodes()
+  const edgeKeys = graph.edges()
+  const chunkSize = 512
+  const length = Math.max(nodeKeys.length, edgeKeys.length)
+  for (let offset = 0; offset < length; offset += chunkSize) {
+    if (disposed || token !== styleRefreshToken || !renderer || !graph) return
+    renderer.refresh({
+      partialGraph: {
+        nodes: nodeKeys.slice(offset, offset + chunkSize),
+        edges: edgeKeys.slice(offset, offset + chunkSize),
+      },
+      skipIndexation: true,
+      schedule: true,
+    })
+    await yieldMainThread()
+  }
+}
+
 const refreshStyles = () => {
   if (!renderer) return
   updateRenderState()
-  renderer.setSetting('renderEdgeLabels', props.showEdgeLabels)
+  const renderEdgeLabels = props.showEdgeLabels && !massiveGraph.value
+  if (massiveGraph.value) {
+    styleRefreshToken += 1
+    const refreshToken = styleRefreshToken
+    const reducer = needsInteractiveReducers()
+    const nextNodeReducer = reducer ? nodeReducer : null
+    const nextEdgeReducer = reducer ? edgeReducer : null
+    const reducerChanged = renderer.getSetting('nodeReducer') !== nextNodeReducer ||
+      renderer.getSetting('edgeReducer') !== nextEdgeReducer
+    const labelsChanged = renderer.getSetting('renderEdgeLabels') !== renderEdgeLabels
+    if (reducerChanged || labelsChanged) {
+      // Sigma must rebuild once when reducer presence changes. Subsequent
+      // focus/selection updates stay on the cooperative partial path below.
+      renderer.setSettings({
+        nodeReducer: nextNodeReducer,
+        edgeReducer: nextEdgeReducer,
+        renderEdgeLabels,
+      })
+      return
+    }
+    void refreshMassiveGraphStyles(refreshToken)
+    return
+  } else if (renderer.getSetting('renderEdgeLabels') !== renderEdgeLabels) {
+    renderer.setSetting('renderEdgeLabels', renderEdgeLabels)
+  }
   renderer.refresh()
 }
 
@@ -245,12 +350,12 @@ const armLayoutTimer = (duration) => {
     layoutRemainingMs = 0
     if (layoutRunning && layout) layout.stop()
     layoutRunning = false
-    renderer?.refresh()
+    renderer?.scheduleRender()
   }, duration)
 }
 
 const resumeLayout = () => {
-  if (!layout || layoutRunning || document.hidden || !props.layoutEnabled) return
+  if (!layout || layoutRunning || document.hidden || !props.layoutEnabled || massiveGraph.value) return
   layout.start()
   layoutRunning = true
   armLayoutTimer(layoutRemainingMs)
@@ -270,7 +375,7 @@ const startLayout = () => {
   stopLayout({ kill: true })
   if (
     !graph || !ForceAtlas2Layout ||
-    !props.layoutEnabled || graph.order < 2
+    !props.layoutEnabled || massiveGraph.value || graph.order < 2
   ) return
 
   try {
@@ -296,7 +401,7 @@ const loadLayoutRuntime = async () => {
     if (disposed) return
     ForceAtlas2Layout = workerModule.default || workerModule.FA2Layout
     if (!ForceAtlas2Layout) throw new Error('ForceAtlas2 worker runtime is unavailable')
-    if (props.layoutEnabled) startLayout()
+    if (props.layoutEnabled && !massiveGraph.value) startLayout()
   } catch (error) {
     if (!disposed) emit('layout-error', error)
   }
@@ -306,7 +411,7 @@ const loadLayoutRuntime = async () => {
 // starting the layout supervisor. Worker bootstrapping used to happen in the
 // same task as renderer creation, delaying the first usable graph frame.
 const scheduleLayoutBootstrap = () => {
-  if (disposed || !props.layoutEnabled) return
+  if (disposed || !props.layoutEnabled || massiveGraph.value) return
   if (ForceAtlas2Layout) {
     startLayout()
     return
@@ -323,6 +428,7 @@ const scheduleLayoutBootstrap = () => {
 
 const runSync = () => {
   if (!graph) return null
+  styleRefreshToken += 1
   const shouldResume = layoutRunning
   stopLayout({ kill: true })
   const result = syncGraphologyGraph(graph, {
@@ -352,12 +458,61 @@ const handleVisibilityChange = () => {
 }
 
 const handleResize = () => {
-  if (!renderer || resizeFrame !== null) return
+  if (!renderer) return
+  if (massiveGraph.value) {
+    if (resizeTimer !== null) window.clearTimeout(resizeTimer)
+    resizeTimer = window.setTimeout(() => {
+      resizeTimer = null
+      renderer?.resize()
+      renderer?.scheduleRender()
+    }, 80)
+    return
+  }
+  if (resizeFrame !== null) return
   resizeFrame = requestAnimationFrame(() => {
     resizeFrame = null
     renderer?.resize()
-    renderer?.refresh()
+    // Resizing changes viewport buffers, not graph attributes. A full refresh
+    // would re-run reducers and rebuild indices for every node and edge.
+    renderer?.scheduleRender()
   })
+}
+
+const handleMassiveWheel = (event) => {
+  if (!massiveGraph.value || !renderer) return
+  // Capture before Sigma's mouse captor. Its ordinary wheel dispatch performs
+  // a synchronous WebGL readPixels hit-test for every wheel event, which can
+  // cost hundreds of milliseconds under software WebGL even though zooming
+  // does not need to know the hovered node.
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  const deltaY = Number(event.deltaY) || 0
+  const rect = container.value?.getBoundingClientRect()
+  if (!rect) return
+  wheelSteps += -deltaY / 120
+  wheelPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  if (wheelTimer !== null) window.clearTimeout(wheelTimer)
+  wheelTimer = window.setTimeout(() => {
+    wheelTimer = null
+    if (!renderer || !wheelPoint || !massiveGraph.value) {
+      wheelSteps = 0
+      wheelPoint = null
+      return
+    }
+    const camera = renderer.getCamera()
+    const current = camera.getState()
+    const ratio = accumulatedWheelZoomRatio({
+      currentRatio: current.ratio,
+      wheelSteps,
+      zoomingRatio: renderer.getSetting('zoomingRatio') ?? 1.7,
+      minRatio: renderer.getSetting('minCameraRatio') ?? 0.04,
+      maxRatio: renderer.getSetting('maxCameraRatio') ?? 5,
+    })
+    const next = renderer.getViewportZoomedState(wheelPoint, ratio)
+    wheelSteps = 0
+    wheelPoint = null
+    camera.setState(next)
+  }, 60)
 }
 
 const resetCamera = () => renderer?.getCamera().animatedReset({ duration: 350 })
@@ -408,8 +563,14 @@ watch([
 
 watch(() => props.layoutEnabled, enabled => {
   if (!graph) return
-  if (enabled) scheduleLayoutBootstrap()
+  if (enabled && !massiveGraph.value) scheduleLayoutBootstrap()
   else stopLayout({ kill: true })
+})
+
+watch(massiveGraph, massive => {
+  if (!graph) return
+  if (massive) stopLayout({ kill: true })
+  else if (props.layoutEnabled) scheduleLayoutBootstrap()
 })
 
 watch([() => props.layoutDurationMs, () => props.layoutSettings], () => {
@@ -431,18 +592,23 @@ onMounted(async () => {
     const Sigma = sigmaModule.default || sigmaModule.Sigma
 
     graph = new Graph({ type: 'directed', multi: true, allowSelfLoops: true })
-    syncGraphologyGraph(graph, {
+    await hydrateGraphologyGraphCooperatively(graph, {
       nodes: props.nodes,
       edges: props.edges,
       nodeAttributes,
       edgeAttributes,
+      shouldAbort: () => disposed,
     })
+    if (disposed) return
     updateRenderState()
+
+    nativeEdgeEventsEnabled = !massiveGraph.value &&
+      shouldEnableNativeEdgeEvents({ edgeCount: graph.size })
 
     renderer = new Sigma(graph, container.value, {
       allowInvalidContainer: true,
-      defaultEdgeType: 'arrow',
-      enableEdgeEvents: true,
+      defaultEdgeType: massiveGraph.value ? 'line' : 'arrow',
+      enableEdgeEvents: nativeEdgeEventsEnabled,
       hideEdgesOnMove: true,
       hideLabelsOnMove: true,
       labelDensity: 0.08,
@@ -450,11 +616,11 @@ onMounted(async () => {
       labelRenderedSizeThreshold: 8,
       minCameraRatio: 0.04,
       maxCameraRatio: 5,
-      renderEdgeLabels: props.showEdgeLabels,
+      renderEdgeLabels: props.showEdgeLabels && !massiveGraph.value,
       stagePadding: 24,
-      zIndex: true,
-      nodeReducer,
-      edgeReducer,
+      zIndex: !massiveGraph.value,
+      nodeReducer: massiveGraph.value && !needsInteractiveReducers() ? null : nodeReducer,
+      edgeReducer: massiveGraph.value && !needsInteractiveReducers() ? null : edgeReducer,
     })
 
     renderer.on('clickNode', ({ node, event }) => {
@@ -464,6 +630,24 @@ onMounted(async () => {
     renderer.on('clickEdge', ({ edge, event }) => {
       event?.preventSigmaDefault?.()
       emit('select-edge', graph.getEdgeAttribute(edge, 'rawData'))
+    })
+    renderer.on('clickStage', ({ event }) => {
+      if (nativeEdgeEventsEnabled) return
+      const edge = findClosestEdgeAtPoint({
+        edges: props.edges,
+        point: event,
+        nodePoint: key => {
+          if (!graph.hasNode(key)) return null
+          return renderer.graphToViewport(graph.getNodeAttributes(key))
+        },
+      })
+      if (!edge) return
+      event?.preventSigmaDefault?.()
+      emit('select-edge', edge)
+    })
+    container.value.addEventListener('wheel', handleMassiveWheel, {
+      capture: true,
+      passive: false,
     })
 
     if (typeof ResizeObserver === 'function') {
@@ -486,15 +670,21 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disposed = true
+  styleRefreshToken += 1
   if (syncFrame !== null) cancelAnimationFrame(syncFrame)
   if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
+  if (resizeTimer !== null) window.clearTimeout(resizeTimer)
+  if (wheelTimer !== null) window.clearTimeout(wheelTimer)
   if (layoutBootstrapFrame !== null) cancelAnimationFrame(layoutBootstrapFrame)
   if (layoutBootstrapTimer !== null) window.clearTimeout(layoutBootstrapTimer)
   syncFrame = null
   resizeFrame = null
+  resizeTimer = null
+  wheelTimer = null
   layoutBootstrapFrame = null
   layoutBootstrapTimer = null
   resizeObserver?.disconnect()
+  container.value?.removeEventListener('wheel', handleMassiveWheel, true)
   window.removeEventListener('resize', handleResize)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopLayout({ kill: true })

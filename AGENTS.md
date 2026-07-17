@@ -14,10 +14,10 @@ This file is a living index for future agents working in this repo. Update it wh
 - `frontend/src/views/ReaderView.vue` - reader shell, chapter navigation, read progress, server search, graph delta polling, and retry action wiring.
 - `frontend/src/components/PdfPageView.vue` - PDF.js canvas/text-layer rendering, search highlights, and graph mention overlays.
 - `frontend/src/components/GraphPanel.vue` - keyed incremental D3 graph visualization, large-graph renderer switching, graph controls, and detail panels.
-- `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL graph renderer with incremental Graphology sync and ForceAtlas2 worker layout.
+- `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL renderer with cooperative hydration, bounded graph styling, dense-graph camera input, and optional ForceAtlas2 layout.
 - `frontend/src/utils/extractionSchedule.js` - whole-book background extraction target policy.
 - `frontend/src/utils/graphDelta.js` - merges additive episode graph deltas into the reader's current graph snapshot.
-- `frontend/src/utils/largeGraph.js` - large-graph thresholds, stable graph keys/positions, and incremental Graphology synchronization.
+- `frontend/src/utils/largeGraph.js` - large/massive graph profiles, stable graph keys/positions, cooperative hydration, click-time edge picking, and Graphology synchronization.
 - `locales/en.json`, `locales/zh.json` - UI strings for the reader, graph panel, and operational states.
 - `render.yaml` - Render production deployment blueprint for backend, frontend, disk, and required secrets.
 - `tools/selfheal/` - local Render log inspection and self-healing workflow.
@@ -37,6 +37,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - Graph polling transfers episode deltas after the initial snapshot, and graph rendering preserves existing positions as chapters are revealed.
 - Dense graphs automatically use a WebGL renderer and worker-based layout while smaller graphs keep the more detailed SVG renderer.
 - Reader controls and graph loading state mount after project metadata; the initial graph and current episode then load in parallel with duplicate graph requests coalesced.
+- Massive all-chapter graphs keep every node and edge but use a static WebGL profile that avoids continuous layout refreshes, native edge-picking buffers, and repeated wheel renders.
 
 ## Decisions
 
@@ -60,7 +61,8 @@ This file is a living index for future agents working in this repo. Update it wh
 - The default graph scope is the current chapter, but sequential extraction is scheduled through the whole book immediately. A smaller target does not make chapter zero finish sooner and leaves later scopes cold.
 - Graph delta clients send `since_episode`; the API returns `revision_episode`, total counts, and either `mode: full` or `mode: delta`. Nodes and edges persist `last_episode` so metadata-only updates are not lost.
 - Server text search is literal, capped at 300 results, and returns UTF-16 offsets compatible with browser text selections.
-- Graphs switch from D3/SVG to lazy Sigma/WebGL at 500 visible nodes or 1,000 visible edges. Sigma paints deterministic positions first; ForceAtlas2 then loads and runs in a worker for a bounded layout window.
+- Graphs switch from D3/SVG to lazy Sigma/WebGL at 500 visible nodes or 1,000 visible edges. Sigma paints deterministic positions first; below the massive threshold, ForceAtlas2 then loads and runs in a worker for a bounded layout window.
+- At 2,000 visible nodes or 8,000 visible edges, use the massive static profile: preserve the exact Graphology graph, render simple line edges, disable z-index/native edge-picking buffers and live ForceAtlas2, select edges geometrically on click, and batch wheel/resize/style work. Capture massive-graph wheel input before Sigma because its normal event dispatch performs a synchronous GPU hit test per event.
 - `npm run test:bundle` resolves the real entry script from built `index.html` and enforces a 300 KiB raw entry limit.
 
 ## Problems And Fixes
@@ -125,6 +127,9 @@ This file is a living index for future agents working in this repo. Update it wh
 - Problem: extraction status advances in memory just before `graph.json` and the project revision are persisted, so the reader could mark the final status as loaded while still holding the previous graph snapshot.
  Fix: compare status against the `revision_episode` confirmed by `/graph/data`, continue polling until they match, and coalesce concurrent initial/poll graph requests.
 
+- Problem: a 5,000-node/20,000-edge All Chapters graph became slower after the first WebGL optimization; a ForceAtlas2 worker still copied every position back through Sigma on each iteration, native edge events maintained an extra picking framebuffer, and every wheel event performed a synchronous GPU hit test before app-level debouncing.
+ Fix: cooperatively hydrate the full graph, use the massive static profile, keep neutral reducers off the initial render, update interactive styles in bounded partial batches, debounce resize, and capture/batch wheel input before Sigma. The acceptance loop now verifies exact graph counts, search, toolbar, maximize/restore, drag, and a 12-event wheel burst.
+
 ## Maintenance Notes
 
 - Do not log API keys or copied book text.
@@ -132,6 +137,6 @@ This file is a living index for future agents working in this repo. Update it wh
 - Add backend tests for extraction fallback behavior without hitting real networks.
 - Run `cd frontend && npm test`, `cd frontend && npm run build`, and `cd frontend && npm run test:bundle` after reader or graph UI changes.
 - Run `cd frontend && BOOKMIRO_ACADEMIC_PDF=/path/to/paper.pdf npm run test:e2e` for the PDF page-reading browser acceptance loop.
-- Keep the large-graph Playwright scenario passing; it must exercise the WebGL threshold without requiring an external fixture.
-- The large-graph acceptance test must keep the reader usable while `/graph/data` is held, issue only one initial graph request, and show the WebGL canvas within 2 seconds of releasing the mocked response.
+- Keep the large-graph Playwright scenario passing; it uses a self-contained 12-chapter fixture with 5,000 nodes and 20,000 edges, starts in the 96-node/240-edge Current scope, then measures the real All Chapters transition.
+- The large-graph acceptance test must keep the reader usable while `/graph/data` is held, issue only one initial graph request, preserve exact All counts, become WebGL-ready within 3 seconds, accept search within 1 second, keep switch/post-interaction heartbeat gaps below 500 ms, and keep its 12-wheel burst below 1 second.
 - Run `backend/.venv/bin/pytest backend/tests` after extraction, API, or backend config changes.
