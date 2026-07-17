@@ -3,6 +3,7 @@ export const LARGE_GRAPH_EDGE_THRESHOLD = 1000
 export const NATIVE_EDGE_EVENTS_MAX_EDGES = 5000
 export const MASSIVE_GRAPH_NODE_THRESHOLD = 2000
 export const MASSIVE_GRAPH_EDGE_THRESHOLD = 8000
+export const MASSIVE_GRAPH_EDGE_LABEL_BUDGET = 36
 
 export const shouldUseLargeGraphRenderer = ({
   nodeCount = 0,
@@ -31,6 +32,53 @@ export const shouldUseMassiveGraphProfile = ({
 } = {}) => (
   Number(nodeCount) >= nodeThreshold || Number(edgeCount) >= edgeThreshold
 )
+
+/**
+ * Pick a small, stable set of useful relationship labels for a massive graph.
+ * Sigma still renders every edge in WebGL; this only bounds the much more
+ * expensive canvas text overlay. Distinct relationship phrases win first,
+ * then edges attached to more connected entities fill the remaining budget.
+ */
+export const selectBoundedEdgeLabelIds = ({
+  edges = [],
+  maxLabels = MASSIVE_GRAPH_EDGE_LABEL_BUDGET,
+} = {}) => {
+  const budget = Math.max(0, Math.floor(Number(maxLabels) || 0))
+  if (!budget) return new Set()
+
+  const degree = new Map()
+  const records = []
+  for (const [index, edge] of (edges || []).entries()) {
+    const id = graphNodeKey(edge?.id ?? edge?.key)
+    const source = graphNodeKey(edge?.source)
+    const target = graphNodeKey(edge?.target)
+    const label = String(edge?.label ?? edge?.name ?? '').trim()
+    if (!id || !source || !target || !label) continue
+    degree.set(source, (degree.get(source) || 0) + 1)
+    degree.set(target, (degree.get(target) || 0) + 1)
+    records.push({ id, source, target, label, index })
+  }
+
+  records.sort((left, right) => (
+    (degree.get(right.source) || 0) + (degree.get(right.target) || 0) -
+      (degree.get(left.source) || 0) - (degree.get(left.target) || 0)
+  ) || left.index - right.index)
+
+  const selected = new Set()
+  const phrases = new Set()
+  for (const record of records) {
+    const phrase = record.label.toLowerCase()
+    if (phrases.has(phrase)) continue
+    selected.add(record.id)
+    phrases.add(phrase)
+    if (selected.size >= budget) return selected
+  }
+  for (const record of records) {
+    selected.add(record.id)
+    if (selected.size >= budget) break
+  }
+  return selected
+}
 
 export const accumulatedWheelZoomRatio = ({
   currentRatio = 1,

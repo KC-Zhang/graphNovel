@@ -13,8 +13,8 @@ This file is a living index for future agents working in this repo. Update it wh
 - `backend/app/api/graph.py` - upload/project/episode/graph/extraction API routes, bounded book search, and graph full/delta responses.
 - `frontend/src/views/ReaderView.vue` - reader shell, chapter navigation, read progress, server search, graph delta polling, and retry action wiring.
 - `frontend/src/components/PdfPageView.vue` - PDF.js canvas/text-layer rendering, search highlights, and graph mention overlays.
-- `frontend/src/components/GraphPanel.vue` - keyed incremental D3 graph visualization, large-graph renderer switching, graph controls, and detail panels.
-- `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL renderer with cooperative hydration, bounded graph styling, dense-graph camera input, and optional ForceAtlas2 layout.
+- `frontend/src/components/GraphPanel.vue` - keyed incremental D3 graph visualization, large-graph renderer switching, graph controls, and directional relationship detail panels.
+- `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL renderer with cooperative hydration, adaptive node labels, a bounded relationship-label canvas, dense-graph camera input, and optional ForceAtlas2 layout.
 - `frontend/src/utils/extractionSchedule.js` - whole-book background extraction target policy.
 - `frontend/src/utils/graphDelta.js` - merges additive episode graph deltas into the reader's current graph snapshot.
 - `frontend/src/utils/largeGraph.js` - large/massive graph profiles, stable graph keys/positions, cooperative hydration, click-time edge picking, and Graphology synchronization.
@@ -38,6 +38,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - Dense graphs automatically use a WebGL renderer and worker-based layout while smaller graphs keep the more detailed SVG renderer.
 - Reader controls and graph loading state mount after project metadata; the initial graph and current episode then load in parallel with duplicate graph requests coalesced.
 - Massive all-chapter graphs keep every node and edge but use a static WebGL profile that avoids continuous layout refreshes, native edge-picking buffers, and repeated wheel renders.
+- Full-graph WebGL views retain a collision-controlled sample of node names and progressively reveal more while zooming. Dense relationship labels remain opt-in and render through a bounded overlay rather than Sigma's all-edge label pass.
 
 ## Decisions
 
@@ -57,12 +58,13 @@ This file is a living index for future agents working in this repo. Update it wh
 - PDF reading mode can change only before graph extraction starts; existing PDF projects are not migrated automatically.
 - The desktop reader stays split and clamps the book pane at 320px; only phone-sized viewports below 640px use the reader/graph single-pane toggle.
 - PDF chapter text is visually reflowed across soft layout line breaks while raw offsets remain unchanged for search and graph mentions.
-- Relationship detail cards label source, relationship, and target explicitly instead of using ambiguous standalone arrows.
+- Relationship details read naturally in canonical graph direction as source entity → relationship → target entity. They lay out horizontally in ordinary panels and vertically in narrow panels, while an explicit localized aria label preserves the semantic roles.
 - The default graph scope is the current chapter, but sequential extraction is scheduled through the whole book immediately. A smaller target does not make chapter zero finish sooner and leaves later scopes cold.
 - Graph delta clients send `since_episode`; the API returns `revision_episode`, total counts, and either `mode: full` or `mode: delta`. Nodes and edges persist `last_episode` so metadata-only updates are not lost.
 - Server text search is literal, capped at 300 results, and returns UTF-16 offsets compatible with browser text selections.
 - Graphs switch from D3/SVG to lazy Sigma/WebGL at 500 visible nodes or 1,000 visible edges. Sigma paints deterministic positions first; below the massive threshold, ForceAtlas2 then loads and runs in a worker for a bounded layout window.
 - At 2,000 visible nodes or 8,000 visible edges, use the massive static profile: preserve the exact Graphology graph, render simple line edges, disable z-index/native edge-picking buffers and live ForceAtlas2, select edges geometrically on click, and batch wheel/resize/style work. Capture massive-graph wheel input before Sigma because its normal event dispatch performs a synchronous GPU hit test per event.
+- Massive graphs keep Sigma's built-in edge-label renderer disabled because it scans every edge on each render. `LargeGraphView` instead selects at most 36 stable, high-connectivity/diverse relationship labels and draws only visible, non-overlapping candidates on a separate canvas; a selected relationship is always included.
 - `npm run test:bundle` resolves the real entry script from built `index.html` and enforces a 300 KiB raw entry limit.
 
 ## Problems And Fixes
@@ -94,8 +96,8 @@ This file is a living index for future agents working in this repo. Update it wh
 - Problem: shrinking the split view below a readable width caused excessive wrapping and cramped controls.
  Fix: keep the desktop split view, clamp the reader at 320px, and reflow PDF soft line breaks into natural paragraphs; reserve full-width pane switching for phone layouts.
 
-- Problem: relationship cards rendered arrows around the relationship label, making direction and meaning unclear.
- Fix: present every edge as explicit Source / Relationship / Target fields in canonical graph direction, with the supporting fact below.
+- Problem: separate Source / Relationship / Target metadata boxes still made a relationship read like form fields, and earlier arrow placement did not clearly connect the two entities.
+ Fix: render only the two entity cards with the relationship phrase above a single arrow between them, keep the canonical source-to-target DOM order, and rotate the flow downward in narrow detail panels.
 
 - Problem: an open relationship detail card could cover the graph-to-reader control after the toolbar wrapped on a phone-width viewport.
  Fix: keep the graph header above detail cards so reader/graph navigation remains reachable at every supported width.
@@ -130,6 +132,12 @@ This file is a living index for future agents working in this repo. Update it wh
 - Problem: a 5,000-node/20,000-edge All Chapters graph became slower after the first WebGL optimization; a ForceAtlas2 worker still copied every position back through Sigma on each iteration, native edge events maintained an extra picking framebuffer, and every wheel event performed a synchronous GPU hit test before app-level debouncing.
  Fix: cooperatively hydrate the full graph, use the massive static profile, keep neutral reducers off the initial render, update interactive styles in bounded partial batches, debounce resize, and capture/batch wheel input before Sigma. The acceptance loop now verifies exact graph counts, search, toolbar, maximize/restore, drag, and a 12-event wheel burst.
 
+- Problem: all node names disappeared in the full-graph WebGL view because the default node size was 6 pixels while `labelRenderedSizeThreshold` was 8; enabling Sigma relationship labels would also re-scan all 20,000 edges on every render.
+ Fix: lower the node threshold beneath the default node size and rely on Sigma's collision grid for an adaptive overview, while drawing at most 36 opt-in relationship labels on a lightweight canvas overlay. Keep the selected relationship label visible even when the global overlay is off.
+
+- Problem: selecting a search result while Sigma was scheduling a settings refresh could read temporarily unnormalized display coordinates and animate the camera far outside the graph.
+ Fix: center search-selected nodes and edges by converting their stable source graph coordinates into framed coordinates instead of reading the transient display cache.
+
 ## Maintenance Notes
 
 - Do not log API keys or copied book text.
@@ -139,4 +147,5 @@ This file is a living index for future agents working in this repo. Update it wh
 - Run `cd frontend && BOOKMIRO_ACADEMIC_PDF=/path/to/paper.pdf npm run test:e2e` for the PDF page-reading browser acceptance loop.
 - Keep the large-graph Playwright scenario passing; it uses a self-contained 12-chapter fixture with 5,000 nodes and 20,000 edges, starts in the 96-node/240-edge Current scope, then measures the real All Chapters transition.
 - The large-graph acceptance test must keep the reader usable while `/graph/data` is held, issue only one initial graph request, preserve exact All counts, become WebGL-ready within 3 seconds, accept search within 1 second, keep switch/post-interaction heartbeat gaps below 500 ms, and keep its 12-wheel burst below 1 second.
+- At the 5,000-node/20,000-edge fixture size, the overview must paint 1–60 node labels. The massive relationship overlay must remain capped at 36, toggle in under 1 second without a heartbeat gap above 500 ms, and keep a searched/selected relationship labelled while the global toggle is off.
 - Run `backend/.venv/bin/pytest backend/tests` after extraction, API, or backend config changes.

@@ -156,18 +156,23 @@
                 >
                   <div
                     class="relationship-statement compact"
-                    :aria-label="`${er.sourceName} ${er.edge.label} ${er.targetName}`"
+                    role="group"
+                    :aria-label="$t('graph.relationshipDirection', {
+                      source: er.sourceName,
+                      relationship: er.edge.label,
+                      target: er.targetName,
+                    })"
                   >
-                    <span class="relationship-part endpoint">
-                      <small>{{ $t('graph.sourceEntity') }}</small>
+                    <span class="relationship-part endpoint source" data-relationship-role="source">
                       <strong>{{ er.sourceName }}</strong>
                     </span>
-                    <span class="relationship-part predicate">
-                      <small>{{ $t('graph.relationshipLabel') }}</small>
-                      <strong>{{ er.edge.label }}</strong>
+                    <span class="relationship-connector">
+                      <span class="relationship-part predicate" data-relationship-role="predicate">
+                        <strong>{{ er.edge.label }}</strong>
+                      </span>
+                      <span class="relationship-arrow" data-relationship-arrow aria-hidden="true"></span>
                     </span>
-                    <span class="relationship-part endpoint">
-                      <small>{{ $t('graph.targetEntity') }}</small>
+                    <span class="relationship-part endpoint target" data-relationship-role="target">
                       <strong>{{ er.targetName }}</strong>
                     </span>
                   </div>
@@ -217,18 +222,23 @@
           <div v-else class="detail-content">
             <div
               class="relationship-statement"
-              :aria-label="`${selectedItem.sourceName} ${selectedItem.edge.label} ${selectedItem.targetName}`"
+              role="group"
+              :aria-label="$t('graph.relationshipDirection', {
+                source: selectedItem.sourceName,
+                relationship: selectedItem.edge.label,
+                target: selectedItem.targetName,
+              })"
             >
-              <span class="relationship-part endpoint">
-                <small>{{ $t('graph.sourceEntity') }}</small>
+              <span class="relationship-part endpoint source" data-relationship-role="source">
                 <strong>{{ selectedItem.sourceName }}</strong>
               </span>
-              <span class="relationship-part predicate">
-                <small>{{ $t('graph.relationshipLabel') }}</small>
-                <strong>{{ selectedItem.edge.label }}</strong>
+              <span class="relationship-connector">
+                <span class="relationship-part predicate" data-relationship-role="predicate">
+                  <strong>{{ selectedItem.edge.label }}</strong>
+                </span>
+                <span class="relationship-arrow" data-relationship-arrow aria-hidden="true"></span>
               </span>
-              <span class="relationship-part endpoint">
-                <small>{{ $t('graph.targetEntity') }}</small>
+              <span class="relationship-part endpoint target" data-relationship-role="target">
                 <strong>{{ selectedItem.targetName }}</strong>
               </span>
             </div>
@@ -1500,7 +1510,8 @@ onUnmounted(() => {
 
 /* 详情面板 */
 .detail-panel {
-  position: absolute; top: 60px; right: 20px; width: 340px;
+  position: absolute; top: 60px; right: 12px; width: min(340px, calc(100% - 24px));
+  box-sizing: border-box;
   max-height: calc(100% - 100px);
   background: #FFF; border: 1px solid #EAEAEA; border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.1); overflow: hidden;
@@ -1521,7 +1532,10 @@ onUnmounted(() => {
   color: #999; line-height: 1; padding: 0; transition: color 0.2s;
 }
 .detail-close:hover { color: #333; }
-.detail-content { padding: 16px; overflow-y: auto; flex: 1; scroll-behavior: smooth; }
+.detail-content {
+  padding: 16px; overflow-y: auto; flex: 1; scroll-behavior: smooth;
+  container-type: inline-size;
+}
 
 .node-name { font-size: 16px; font-weight: 600; color: #222; margin-bottom: 4px; }
 .node-aliases { font-size: 12px; color: #888; margin-bottom: 8px; }
@@ -1552,29 +1566,68 @@ onUnmounted(() => {
 .mentions-list { margin-top: 2px; }
 
 .relationship-statement {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, auto) minmax(0, 1fr);
-  gap: 8px; align-items: stretch; margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(104px, 1.2fr) minmax(72px, 1fr);
+  gap: 0; align-items: center; margin-bottom: 12px;
 }
 .relationship-part {
-  min-width: 0; padding: 9px 8px; border: 1px solid #E8E8E8;
-  border-radius: 7px; background: #F8F8F8; text-align: center;
-}
-.relationship-part small {
-  display: block; margin-bottom: 3px; color: #999;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  min-width: 0; text-align: center;
 }
 .relationship-part strong {
   display: block; color: #222; font-size: 12px; line-height: 1.35;
   overflow-wrap: anywhere;
 }
-.relationship-part.predicate { border-color: #DCCBE5; background: #F8F1FB; }
-.relationship-part.predicate strong { color: #7B2D8E; }
-.relationship-statement.compact { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-.relationship-statement.compact .relationship-part {
-  display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 6px;
-  align-items: center; padding: 6px 8px; text-align: left;
+.relationship-part.endpoint {
+  align-self: stretch; display: flex; flex-direction: column; padding: 10px 8px;
+  border: 1px solid #E8E8E8; border-radius: 7px; background: #F8F8F8;
+  justify-content: center; position: relative; z-index: 1;
 }
-.relationship-statement.compact .relationship-part small { margin: 0; }
+.relationship-part.endpoint.source { border-color: #D7E1EA; background: #F7FAFC; }
+.relationship-part.endpoint.target { border-color: #E6DDE9; background: #FBF8FC; }
+.relationship-connector {
+  min-width: 0; align-self: stretch; display: grid;
+  grid-template-rows: minmax(0, 1fr) 14px; gap: 3px; align-items: end;
+  padding: 4px 7px 0; text-align: center;
+}
+.relationship-part.predicate { align-self: end; padding: 0 2px; }
+.relationship-part.predicate strong { color: #7B2D8E; }
+.relationship-arrow {
+  position: relative; display: block; width: 100%; height: 14px;
+}
+.relationship-arrow::before {
+  content: ''; position: absolute; left: 0; right: 7px; top: 6px;
+  height: 2px; border-radius: 2px; background: #7B2D8E;
+}
+.relationship-arrow::after {
+  content: ''; position: absolute; right: 0; top: 2px;
+  width: 0; height: 0; border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent; border-left: 8px solid #7B2D8E;
+}
+.relationship-statement.compact {
+  grid-template-columns: minmax(62px, 1fr) minmax(92px, 1.15fr) minmax(62px, 1fr);
+  margin-bottom: 8px;
+}
+.relationship-statement.compact .relationship-part.endpoint { padding: 7px 6px; }
+.relationship-statement.compact .relationship-part strong { font-size: 11px; }
+
+@container (max-width: 290px) {
+  .relationship-statement,
+  .relationship-statement.compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .relationship-connector {
+    grid-template-rows: auto 28px; padding: 4px 0;
+  }
+  .relationship-arrow { width: 16px; height: 28px; justify-self: center; }
+  .relationship-arrow::before {
+    left: 7px; right: auto; top: 0; bottom: 7px; width: 2px; height: auto;
+  }
+  .relationship-arrow::after {
+    left: 3px; right: auto; top: auto; bottom: 0;
+    border-top: 8px solid #7B2D8E; border-right: 5px solid transparent;
+    border-bottom: 0; border-left: 5px solid transparent;
+  }
+}
 
 /* Edge Reel */
 .edge-reel { margin-top: 14px; border-top: 1px solid #F0F0F0; padding-top: 8px; }

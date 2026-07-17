@@ -406,6 +406,7 @@
     "sourceEntity": "Source",
     "relationshipLabel": "Relationship",
     "targetEntity": "Target",
+    "relationshipDirection": "Source: {source}. Relationship: {relationship}. Target: {target}.",
     "reelHint": "Scroll or use ↑/↓ to walk through relationships; each highlights on the graph.",
     "focusUnread": "Focus unread",
     "chapterOnly": "This chapter",

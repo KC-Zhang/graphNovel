@@ -7,6 +7,12 @@ const CURRENT_EDGE_COUNT = 240
 const ALL_NODE_COUNT = 5_000
 const ALL_EDGE_COUNT = 20_000
 const HEARTBEAT_INTERVAL_MS = 16
+const SEMANTIC_SOURCE_ID = `entity-${ALL_NODE_COUNT - 2}`
+const SEMANTIC_TARGET_ID = `entity-${ALL_NODE_COUNT - 1}`
+const SEMANTIC_EDGE_ID = 'relationship-semantic'
+const SEMANTIC_SOURCE_NAME = 'Narrator'
+const SEMANTIC_RELATIONSHIP = 'frequented restaurant of'
+const SEMANTIC_TARGET_NAME = 'Jimmy Rodriguez'
 
 const episodeFor = (index) => (
   index < CURRENT_NODE_COUNT
@@ -17,22 +23,34 @@ const episodeFor = (index) => (
 const makeAllChaptersGraph = () => {
   const nodes = Array.from({ length: ALL_NODE_COUNT }, (_, index) => {
     const episode = episodeFor(index)
+    const id = `entity-${index}`
+    const semanticName = id === SEMANTIC_SOURCE_ID
+      ? SEMANTIC_SOURCE_NAME
+      : id === SEMANTIC_TARGET_ID
+        ? SEMANTIC_TARGET_NAME
+        : null
     return {
-      id: `entity-${index}`,
-      name: `Entity ${index}`,
+      id,
+      name: semanticName || `Entity ${index}`,
+      size: semanticName ? 18 : undefined,
       type: index % 3 === 0 ? 'Person' : index % 3 === 1 ? 'Concept' : 'Place',
       first_episode: episode,
       last_episode: episode,
-      mentions: [{ episode, quote: `Entity ${index}` }],
+      mentions: [{ episode, quote: semanticName || `Entity ${index}` }],
     }
   })
 
   const edges = Array.from({ length: ALL_EDGE_COUNT }, (_, index) => {
+    const semantic = index === ALL_EDGE_COUNT - 1
     const isCurrent = index < CURRENT_EDGE_COUNT
-    const sourceIndex = isCurrent
+    const sourceIndex = semantic
+      ? ALL_NODE_COUNT - 2
+      : isCurrent
       ? index % CURRENT_NODE_COUNT
       : index % ALL_NODE_COUNT
-    let targetIndex = isCurrent
+    let targetIndex = semantic
+      ? ALL_NODE_COUNT - 1
+      : isCurrent
       ? (index * 17 + 1) % CURRENT_NODE_COUNT
       : (index * 37 + Math.floor(index / ALL_NODE_COUNT) + 1) % ALL_NODE_COUNT
     if (targetIndex === sourceIndex) targetIndex = (targetIndex + 1) % ALL_NODE_COUNT
@@ -40,10 +58,10 @@ const makeAllChaptersGraph = () => {
       ? 0
       : 1 + ((index - CURRENT_EDGE_COUNT) % (EPISODE_COUNT - 1))
     return {
-      id: `relationship-${index}`,
+      id: semantic ? SEMANTIC_EDGE_ID : `relationship-${index}`,
       source: `entity-${sourceIndex}`,
       target: `entity-${targetIndex}`,
-      label: `connects ${index}`,
+      label: semantic ? SEMANTIC_RELATIONSHIP : `connects ${index}`,
       fact: `Stress-test relationship ${index}`,
       first_episode: episode,
       last_episode: episode,
@@ -78,6 +96,10 @@ const readHeartbeat = page => page.evaluate(({ expectedInterval }) => {
   }
 }, { expectedInterval: HEARTBEAT_INTERVAL_MS })
 
+const readLabelCount = async (graph, attribute) => Number(
+  await graph.getAttribute(attribute) || 0
+)
+
 test.describe('all-chapters large graph performance', () => {
   test('switches 5k nodes and 20k edges to WebGL while the reader stays responsive', async ({ page }) => {
     const graph = makeAllChaptersGraph()
@@ -111,12 +133,40 @@ test.describe('all-chapters large graph performance', () => {
     await page.addInitScript(({ heartbeatInterval }) => {
       const now = performance.now()
       window.__bookMiroHeartbeat = { last: now, startedAt: now, samples: [] }
+      window.__bookMiroCanvasLabels = { nodes: [], edges: [] }
       window.setInterval(() => {
         const heartbeat = window.__bookMiroHeartbeat
         const current = performance.now()
         heartbeat.samples.push(current - heartbeat.last)
         heartbeat.last = current
       }, heartbeatInterval)
+
+      const contextPrototype = window.CanvasRenderingContext2D?.prototype
+      if (contextPrototype) {
+        const originalClearRect = contextPrototype.clearRect
+        const originalFillText = contextPrototype.fillText
+        contextPrototype.clearRect = function (...args) {
+          const className = String(this.canvas?.className || '')
+          if (
+            className.includes('sigma-edgeLabels') ||
+            className.includes('large-graph-edge-label-overlay')
+          ) window.__bookMiroCanvasLabels.edges = []
+          else if (className.includes('sigma-labels')) window.__bookMiroCanvasLabels.nodes = []
+          return originalClearRect.apply(this, args)
+        }
+        contextPrototype.fillText = function (value, ...args) {
+          const className = String(this.canvas?.className || '')
+          if (
+            className.includes('sigma-edgeLabels') ||
+            className.includes('large-graph-edge-label-overlay')
+          ) {
+            window.__bookMiroCanvasLabels.edges.push(String(value))
+          } else if (className.includes('sigma-labels')) {
+            window.__bookMiroCanvasLabels.nodes.push(String(value))
+          }
+          return originalFillText.call(this, value, ...args)
+        }
+      }
     }, { heartbeatInterval: HEARTBEAT_INTERVAL_MS })
 
     await page.route(`**/api/graph/project/${projectId}`, route => route.fulfill({
@@ -262,6 +312,12 @@ test.describe('all-chapters large graph performance', () => {
     expect(graphRequestCount).toBe(1)
     const rendererReadyMs = Date.now() - switchStartedAt
 
+    await expect.poll(() => readLabelCount(largeGraph, 'data-node-label-count')).toBeGreaterThanOrEqual(1)
+    const initialNodeLabelCount = await readLabelCount(largeGraph, 'data-node-label-count')
+    const initialEdgeLabelCount = await readLabelCount(largeGraph, 'data-edge-label-count')
+    expect(initialNodeLabelCount).toBeLessThanOrEqual(60)
+    expect(initialEdgeLabelCount).toBe(0)
+
     // Give the heartbeat one turn after the ready mutation so the final graph
     // synchronization stall is included in the sample.
     await page.waitForTimeout(100)
@@ -276,6 +332,82 @@ test.describe('all-chapters large graph performance', () => {
     expect(rendererReadyMs).toBeLessThan(3_000)
     expect(switchHeartbeat.samples).toBeGreaterThan(3)
     expect(switchHeartbeat.maxGap).toBeLessThan(500)
+
+    // Dense graphs keep relationship labels opt-in. The massive renderer uses
+    // an independent bounded overlay, so toggling it never starts Sigma's
+    // per-frame full-edge scan.
+    const edgeLabels = page.locator('.tool-btn').filter({ hasText: /Show Edge Labels|显示关系标签/ })
+    await expect(edgeLabels).not.toHaveClass(/active/)
+
+    await resetHeartbeat(page)
+    const labelsOnStartedAt = Date.now()
+    await edgeLabels.click()
+    await expect(edgeLabels).toHaveClass(/active/)
+    await expect.poll(() => readLabelCount(largeGraph, 'data-edge-label-count')).toBeGreaterThanOrEqual(1)
+    const labelsOnMs = Date.now() - labelsOnStartedAt
+    const restoredEdgeLabelCount = await readLabelCount(largeGraph, 'data-edge-label-count')
+    expect(restoredEdgeLabelCount).toBeLessThanOrEqual(36)
+    await page.waitForTimeout(100)
+    const labelsOnHeartbeat = await readHeartbeat(page)
+    expect(labelsOnMs).toBeLessThan(1_000)
+    expect(labelsOnHeartbeat.maxGap).toBeLessThan(500)
+
+    await resetHeartbeat(page)
+    const labelsOffStartedAt = Date.now()
+    await edgeLabels.click()
+    await expect(edgeLabels).not.toHaveClass(/active/)
+    await expect.poll(() => readLabelCount(largeGraph, 'data-edge-label-count')).toBe(0)
+    const labelsOffMs = Date.now() - labelsOffStartedAt
+    await page.waitForTimeout(100)
+    const labelsOffHeartbeat = await readHeartbeat(page)
+    expect(labelsOffMs).toBeLessThan(1_000)
+    expect(labelsOffHeartbeat.maxGap).toBeLessThan(500)
+
+    // A selected relationship remains labelled even while the global edge
+    // label overlay is off, and its detail reads in canonical source -> target
+    // order rather than as three unrelated metadata fields.
+    await searchInput.fill(SEMANTIC_RELATIONSHIP)
+    const semanticResult = page.locator('.search-result.edge').filter({ hasText: SEMANTIC_RELATIONSHIP }).first()
+    await expect(semanticResult).toBeVisible({ timeout: 3_000 })
+    await semanticResult.click()
+    const relationshipStatement = page.locator('.detail-panel .relationship-statement:not(.compact)')
+    await expect(relationshipStatement).toBeVisible()
+    await expect(relationshipStatement.locator('.endpoint.source strong')).toHaveText(SEMANTIC_SOURCE_NAME)
+    await expect(relationshipStatement.locator('.predicate strong')).toHaveText(SEMANTIC_RELATIONSHIP)
+    await expect(relationshipStatement.locator('.endpoint.target strong')).toHaveText(SEMANTIC_TARGET_NAME)
+    await expect(relationshipStatement.locator('.relationship-arrow')).toBeVisible()
+    await expect(relationshipStatement).toHaveAttribute(
+      'aria-label',
+      `Source: ${SEMANTIC_SOURCE_NAME}. Relationship: ${SEMANTIC_RELATIONSHIP}. Target: ${SEMANTIC_TARGET_NAME}.`,
+    )
+    const relationshipCenters = await Promise.all([
+      relationshipStatement.locator('.endpoint.source').boundingBox(),
+      relationshipStatement.locator('.relationship-connector').boundingBox(),
+      relationshipStatement.locator('.endpoint.target').boundingBox(),
+    ])
+    const [sourceCenter, connectorCenter, targetCenter] = relationshipCenters.map(box => (
+      box.x + box.width / 2
+    ))
+    expect(sourceCenter).toBeLessThan(connectorCenter)
+    expect(connectorCenter).toBeLessThan(targetCenter)
+    await expect.poll(() => readLabelCount(largeGraph, 'data-edge-label-count')).toBeGreaterThanOrEqual(1)
+    await expect.poll(() => page.evaluate(label => (
+      window.__bookMiroCanvasLabels.edges.includes(label)
+    ), SEMANTIC_RELATIONSHIP)).toBe(true)
+
+    await page.locator('.detail-panel .detail-close').click()
+    await expect(page.locator('.detail-panel')).toHaveCount(0)
+    await expect.poll(() => readLabelCount(largeGraph, 'data-edge-label-count')).toBe(0)
+
+    console.log('all-chapters label metrics', {
+      initialNodeLabelCount,
+      initialEdgeLabelCount,
+      labelsOnMs,
+      labelsOnHeartbeat,
+      restoredEdgeLabelCount,
+      labelsOffMs,
+      labelsOffHeartbeat,
+    })
 
     // The graph remains interactive after its first canvas. Real toolbar,
     // resize, zoom, and pan actions must not reintroduce long main-thread work.

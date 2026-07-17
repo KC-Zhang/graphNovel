@@ -105,13 +105,46 @@ test.describe('PDF page reading', () => {
     await expect(relationship).toBeVisible()
     await relationship.click()
     const statement = page.locator('.detail-panel .relationship-statement')
-    await expect(statement).toContainText(/Source|来源实体/)
-    await expect(statement).toContainText(/Relationship|关系/)
-    await expect(statement).toContainText(/Target|目标实体/)
+    await expect(statement).toHaveAttribute('role', 'group')
     await expect(statement).toContainText('Agentopia')
     await expect(statement).toContainText('enhances')
     await expect(statement).toContainText('LLM')
-    await expect(statement).not.toContainText('→')
+    await expect(statement.locator('.relationship-arrow')).toBeVisible()
+    await expect(statement).toHaveAttribute('aria-label', /Source: Agentopia\. Relationship: enhances\. Target: LLM\./)
+    const relationshipCenters = async () => {
+      const boxes = await Promise.all([
+        statement.locator('.endpoint.source').boundingBox(),
+        statement.locator('.relationship-connector').boundingBox(),
+        statement.locator('.endpoint.target').boundingBox(),
+      ])
+      return boxes.map(box => ({
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+      }))
+    }
+    const [desktopSource, desktopConnector, desktopTarget] = await relationshipCenters()
+    expect(desktopSource.x).toBeLessThan(desktopConnector.x)
+    expect(desktopConnector.x).toBeLessThan(desktopTarget.x)
+
+    const graphPane = page.locator('.graph-pane')
+    await graphPane.evaluate(el => {
+      el.style.flex = '0 0 310px'
+      el.style.width = '310px'
+    })
+    const detailPanel = page.locator('.detail-panel')
+    await expect.poll(async () => {
+      const [source, connector, target] = await relationshipCenters()
+      return source.y < connector.y && connector.y < target.y
+    }).toBe(true)
+    const narrowBounds = await Promise.all([graphPane.boundingBox(), detailPanel.boundingBox()])
+    expect(narrowBounds[1].x).toBeGreaterThanOrEqual(narrowBounds[0].x)
+    expect(narrowBounds[1].x + narrowBounds[1].width).toBeLessThanOrEqual(
+      narrowBounds[0].x + narrowBounds[0].width,
+    )
+    await graphPane.evaluate(el => {
+      el.style.removeProperty('flex')
+      el.style.removeProperty('width')
+    })
 
     await page.setViewportSize({ width: 800, height: 800 })
     await expect(page.locator('.reader-body')).not.toHaveClass(/single-pane/)

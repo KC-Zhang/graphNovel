@@ -7,6 +7,8 @@ import {
   findClosestEdgeAtPoint,
   hydrateGraphologyGraphCooperatively,
   inferLargeGraphLayoutSettings,
+  MASSIVE_GRAPH_EDGE_LABEL_BUDGET,
+  selectBoundedEdgeLabelIds,
   shouldEnableNativeEdgeEvents,
   shouldUseLargeGraphRenderer,
   shouldUseMassiveGraphProfile,
@@ -76,6 +78,33 @@ test('massive graphs use the static first-paint profile at either limit', () => 
   assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 1999, edgeCount: 7999 }), false)
   assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 2000, edgeCount: 100 }), true)
   assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 100, edgeCount: 8000 }), true)
+})
+
+test('massive edge labels are deterministic, diverse, and strictly budgeted', () => {
+  const edges = Array.from({ length: 120 }, (_, index) => ({
+    id: `e${index}`,
+    source: index < 60 ? 'hub' : `n${index}`,
+    target: `n${index + 1}`,
+    label: index % 3 === 0 ? 'knows' : `relationship ${index}`,
+  }))
+  const first = selectBoundedEdgeLabelIds({ edges })
+  const second = selectBoundedEdgeLabelIds({ edges })
+
+  assert.equal(first.size, MASSIVE_GRAPH_EDGE_LABEL_BUDGET)
+  assert.deepEqual([...first], [...second])
+  assert.ok(first.has('e0'), 'a highly connected labelled edge should be represented')
+})
+
+test('massive edge label selection ignores blank labels and honors a smaller budget', () => {
+  const selected = selectBoundedEdgeLabelIds({
+    edges: [
+      { id: 'blank', source: 'a', target: 'b', label: '  ' },
+      { id: 'one', source: 'a', target: 'b', label: 'supports' },
+      { id: 'two', source: 'b', target: 'c', label: 'causes' },
+    ],
+    maxLabels: 1,
+  })
+  assert.deepEqual([...selected], ['one'])
 })
 
 test('massive wheel input is accumulated into one bounded camera ratio', () => {

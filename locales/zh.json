@@ -406,6 +406,7 @@
     "sourceEntity": "起点实体",
     "relationshipLabel": "关系",
     "targetEntity": "目标实体",
+    "relationshipDirection": "起点实体：{source}。关系：{relationship}。目标实体：{target}。",
     "reelHint": "滚动或使用 ↑/↓ 逐条走查关系，每条都会在图谱中高亮。",
     "focusUnread": "只看未读",
     "chapterOnly": "本章",

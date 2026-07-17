@@ -8,8 +8,15 @@
     :data-renderer-status="status"
     :data-node-count="nodes.length"
     :data-edge-count="edges.length"
+    :data-node-label-count="renderedNodeLabelCount"
+    :data-edge-label-count="renderedEdgeLabelCount"
     :data-layout-mode="graphLayoutMode"
   >
+    <canvas
+      ref="edgeLabelCanvas"
+      class="large-graph-edge-label-overlay"
+      aria-hidden="true"
+    ></canvas>
     <div v-if="status === 'error'" class="large-graph-view__message" role="status">
       WebGL graph unavailable
     </div>
@@ -27,6 +34,8 @@ import {
   graphNodeKey,
   hydrateGraphologyGraphCooperatively,
   inferLargeGraphLayoutSettings,
+  MASSIVE_GRAPH_EDGE_LABEL_BUDGET,
+  selectBoundedEdgeLabelIds,
   shouldEnableNativeEdgeEvents,
   shouldUseMassiveGraphProfile,
   syncGraphologyGraph,
@@ -54,7 +63,10 @@ const emit = defineEmits([
   'select-node', 'select-edge', 'ready', 'renderer-error', 'layout-error',
 ])
 const container = ref(null)
+const edgeLabelCanvas = ref(null)
 const status = ref('loading')
+const renderedNodeLabelCount = ref(0)
+const renderedEdgeLabelCount = ref(0)
 const massiveGraph = computed(() => shouldUseMassiveGraphProfile({
   nodeCount: props.nodes.length,
   edgeCount: props.edges.length,
@@ -95,10 +107,14 @@ const renderState = {
   hasExplicitFocus: false,
   accentNodes: new Set(),
   accentEdges: new Set(),
+  labelEdges: new Set(),
 }
 
 let typeColorSource = null
 let typeColorLookup = new Map()
+let edgeLabelCandidateSource = null
+let edgeLabelCandidates = new Set()
+let edgeLabelContext = null
 
 const asKey = value => graphNodeKey(value)
 const asKeySet = values => new Set(Array.from(values || [], value => String(value)))
@@ -157,6 +173,38 @@ const edgeAttributes = edge => ({
   rawData: edge,
 })
 
+const massiveEdgeLabels = selectedEdge => {
+  if (!massiveGraph.value || !graph) return new Set()
+  let labels = new Set()
+  if (props.showEdgeLabels) {
+    if (edgeLabelCandidateSource !== props.edges) {
+      const records = []
+      graph.forEachEdge((key, data, source, target) => {
+        records.push({
+          id: String(key),
+          source: String(source),
+          target: String(target),
+          label: data.label,
+        })
+      })
+      edgeLabelCandidates = selectBoundedEdgeLabelIds({ edges: records })
+      edgeLabelCandidateSource = props.edges
+    }
+    labels = new Set(edgeLabelCandidates)
+  }
+  if (selectedEdge && graph.hasEdge(selectedEdge)) {
+    const label = String(graph.getEdgeAttribute(selectedEdge, 'label') || '').trim()
+    if (label && !labels.has(selectedEdge)) {
+      if (labels.size >= MASSIVE_GRAPH_EDGE_LABEL_BUDGET) {
+        const last = Array.from(labels).at(-1)
+        if (last) labels.delete(last)
+      }
+      labels.add(selectedEdge)
+    }
+  }
+  return labels
+}
+
 const updateRenderState = () => {
   if (!graph) return
 
@@ -195,6 +243,7 @@ const updateRenderState = () => {
   renderState.hasExplicitFocus = hasExplicitFocus
   renderState.accentNodes = exemptNodes
   renderState.accentEdges = exemptEdges
+  renderState.labelEdges = massiveEdgeLabels(selectedEdge)
 }
 
 const nodeReducer = (node, data) => {
@@ -234,14 +283,18 @@ const edgeReducer = (edge, data) => {
   const readAndFiltered = props.focusUnread &&
     renderState.seenEdges.has(key) && !renderState.accentEdges.has(key)
   const dimmed = outsideFocus || readAndFiltered
+  const showLabel = !massiveGraph.value && (selected || props.showEdgeLabels)
   return {
     ...data,
-    label: props.showEdgeLabels && !massiveGraph.value ? data.label : '',
+    // Massive graphs paint their small, bounded relationship-label set on a
+    // separate canvas. Keeping Sigma's own edge-label pass disabled avoids
+    // its full graph.forEachEdge scan on every camera frame.
+    label: showLabel ? data.label : '',
     color: selected ? '#FF4500' : related ? '#E91E63' : (
       dimmed ? colorWithAlpha(data.color, 0.1) : data.color
     ),
     size: data.size + (selected ? 2.75 : related ? 1.1 : 0),
-    forceLabel: props.showEdgeLabels && selected,
+    forceLabel: !massiveGraph.value && selected,
     zIndex: selected ? 3 : related ? 2 : 0,
   }
 }
@@ -250,6 +303,116 @@ const needsInteractiveReducers = () => Boolean(
   renderState.selectedNode || renderState.selectedEdge || props.focusUnread ||
   renderState.hasExplicitFocus
 )
+
+const roundedRect = (context, x, y, width, height, radius) => {
+  const r = Math.min(radius, width / 2, height / 2)
+  context.beginPath()
+  context.moveTo(x + r, y)
+  context.arcTo(x + width, y, x + width, y + height, r)
+  context.arcTo(x + width, y + height, x, y + height, r)
+  context.arcTo(x, y + height, x, y, r)
+  context.arcTo(x, y, x + width, y, r)
+  context.closePath()
+}
+
+const rectanglesOverlap = (left, right, padding = 4) => !(
+  left.right + padding < right.left ||
+  right.right + padding < left.left ||
+  left.bottom + padding < right.top ||
+  right.bottom + padding < left.top
+)
+
+const drawMassiveEdgeLabels = () => {
+  const canvas = edgeLabelCanvas.value
+  if (!canvas || !renderer || !graph || !massiveGraph.value) {
+    renderedEdgeLabelCount.value = 0
+    return
+  }
+
+  const width = Math.max(1, container.value?.clientWidth || 1)
+  const height = Math.max(1, container.value?.clientHeight || 1)
+  const pixelRatio = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1))
+  const physicalWidth = Math.round(width * pixelRatio)
+  const physicalHeight = Math.round(height * pixelRatio)
+  if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
+    canvas.width = physicalWidth
+    canvas.height = physicalHeight
+    canvas.style.width = `${width}px`
+    canvas.style.height = `${height}px`
+    edgeLabelContext = canvas.getContext('2d')
+  }
+
+  const context = edgeLabelContext || canvas.getContext('2d')
+  if (!context) {
+    renderedEdgeLabelCount.value = 0
+    return
+  }
+  edgeLabelContext = context
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+  context.clearRect(0, 0, width, height)
+
+  const selectedEdge = renderState.selectedEdge
+  const labelEdges = [...renderState.labelEdges]
+  if (selectedEdge) {
+    const selectedIndex = labelEdges.indexOf(selectedEdge)
+    if (selectedIndex > 0) {
+      labelEdges.splice(selectedIndex, 1)
+      labelEdges.unshift(selectedEdge)
+    }
+  }
+
+  context.font = '600 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  const occupied = []
+  let displayed = 0
+
+  for (const edge of labelEdges) {
+    if (!graph.hasEdge(edge)) continue
+    const label = String(graph.getEdgeAttribute(edge, 'label') || '').trim()
+    if (!label) continue
+    const source = graph.source(edge)
+    const target = graph.target(edge)
+    if (!graph.hasNode(source) || !graph.hasNode(target)) continue
+    const sourcePoint = renderer.graphToViewport(graph.getNodeAttributes(source))
+    const targetPoint = renderer.graphToViewport(graph.getNodeAttributes(target))
+    const x = (sourcePoint.x + targetPoint.x) / 2
+    const y = (sourcePoint.y + targetPoint.y) / 2
+    if (x < -80 || x > width + 80 || y < -30 || y > height + 30) continue
+
+    const visibleLabel = label.length > 44 ? `${label.slice(0, 43)}…` : label
+    const boxWidth = Math.min(280, Math.ceil(context.measureText(visibleLabel).width) + 14)
+    const boxHeight = 20
+    const bounds = {
+      left: x - boxWidth / 2,
+      right: x + boxWidth / 2,
+      top: y - boxHeight / 2,
+      bottom: y + boxHeight / 2,
+    }
+    const isSelected = edge === selectedEdge
+    if (!isSelected && occupied.some(rect => rectanglesOverlap(rect, bounds))) continue
+
+    roundedRect(context, bounds.left, bounds.top, boxWidth, boxHeight, 5)
+    context.fillStyle = isSelected ? 'rgba(255, 244, 239, 0.96)' : 'rgba(255, 255, 255, 0.92)'
+    context.fill()
+    context.strokeStyle = isSelected ? 'rgba(255, 69, 0, 0.7)' : 'rgba(123, 45, 142, 0.35)'
+    context.lineWidth = 1
+    context.stroke()
+    context.fillStyle = isSelected ? '#C83B0A' : '#5F3569'
+    context.fillText(visibleLabel, x, y + 0.5)
+    occupied.push(bounds)
+    displayed += 1
+  }
+
+  renderedEdgeLabelCount.value = displayed
+}
+
+const updateRenderedLabelCounts = () => {
+  if (!renderer) return
+  renderedNodeLabelCount.value = renderer.getNodeDisplayedLabels().size
+  if (massiveGraph.value) drawMassiveEdgeLabels()
+  else renderedEdgeLabelCount.value = renderer.getEdgeDisplayedLabels().size
+}
 
 const yieldMainThread = () => {
   if (typeof globalThis.scheduler?.yield === 'function') return globalThis.scheduler.yield()
@@ -298,7 +461,9 @@ const refreshMassiveGraphStyles = async (token) => {
 const refreshStyles = () => {
   if (!renderer) return
   updateRenderState()
-  const renderEdgeLabels = props.showEdgeLabels && !massiveGraph.value
+  const renderEdgeLabels = !massiveGraph.value && (
+    props.showEdgeLabels || Boolean(renderState.selectedEdge)
+  )
   if (massiveGraph.value) {
     styleRefreshToken += 1
     const refreshToken = styleRefreshToken
@@ -324,6 +489,16 @@ const refreshStyles = () => {
     renderer.setSetting('renderEdgeLabels', renderEdgeLabels)
   }
   renderer.refresh()
+}
+
+const refreshEdgeLabels = () => {
+  if (!renderer) return
+  if (!massiveGraph.value) {
+    refreshStyles()
+    return
+  }
+  updateRenderState()
+  drawMassiveEdgeLabels()
 }
 
 const clearLayoutTimer = () => {
@@ -437,6 +612,7 @@ const runSync = () => {
     nodeAttributes,
     edgeAttributes,
   })
+  edgeLabelCandidateSource = null
   updateRenderState()
   renderer?.refresh()
   if (result.topologyChanged || shouldResume) startLayout()
@@ -517,16 +693,27 @@ const handleMassiveWheel = (event) => {
 
 const resetCamera = () => renderer?.getCamera().animatedReset({ duration: 350 })
 
+const framedNodePoint = key => {
+  if (!renderer || !graph?.hasNode(key)) return null
+  // A settings change schedules Sigma's full refresh. During the short gap
+  // before that frame, getNodeDisplayData can contain raw graph coordinates
+  // that have not been normalized yet. Convert from the source attributes so
+  // search-driven centering can never send the camera far outside the graph.
+  const viewport = renderer.graphToViewport(graph.getNodeAttributes(key))
+  const point = renderer.viewportToFramedGraph(viewport)
+  return Number.isFinite(point.x) && Number.isFinite(point.y) ? point : null
+}
+
 const centerOnNode = (id) => {
   if (!renderer) return false
   const key = asKey(id)
   if (!key || !graph.hasNode(key)) return false
-  const data = renderer.getNodeDisplayData(key)
-  if (!data) return false
+  const point = framedNodePoint(key)
+  if (!point) return false
   const current = renderer.getCamera().getState()
   renderer.getCamera().animate({
-    x: data.x,
-    y: data.y,
+    x: point.x,
+    y: point.y,
     ratio: Math.min(current.ratio, 0.35),
   }, { duration: 350 })
   return true
@@ -536,8 +723,8 @@ const centerOnEdge = (id) => {
   if (!renderer) return false
   const key = asKey(id)
   if (!key || !graph.hasEdge(key)) return false
-  const source = renderer.getNodeDisplayData(graph.source(key))
-  const target = renderer.getNodeDisplayData(graph.target(key))
+  const source = framedNodePoint(graph.source(key))
+  const target = framedNodePoint(graph.target(key))
   if (!source || !target) return false
   const current = renderer.getCamera().getState()
   renderer.getCamera().animate({
@@ -558,8 +745,8 @@ watch([
   () => props.focusUnread,
   () => props.focusedNodeIds,
   () => props.focusedEdgeIds,
-  () => props.showEdgeLabels,
 ], refreshStyles, { flush: 'post' })
+watch(() => props.showEdgeLabels, refreshEdgeLabels, { flush: 'post' })
 
 watch(() => props.layoutEnabled, enabled => {
   if (!graph) return
@@ -611,12 +798,18 @@ onMounted(async () => {
       enableEdgeEvents: nativeEdgeEventsEnabled,
       hideEdgesOnMove: true,
       hideLabelsOnMove: true,
+      // The label grid already limits overview labels to roughly one per
+      // occupied cell and reveals more while zooming. Keep its size threshold
+      // below the default six-pixel node, otherwise every overview label is
+      // rejected before the grid can do that adaptive work.
       labelDensity: 0.08,
-      labelGridCellSize: 140,
-      labelRenderedSizeThreshold: 8,
+      labelGridCellSize: massiveGraph.value ? 170 : 140,
+      labelRenderedSizeThreshold: massiveGraph.value ? 5 : 5.5,
       minCameraRatio: 0.04,
       maxCameraRatio: 5,
-      renderEdgeLabels: props.showEdgeLabels && !massiveGraph.value,
+      renderEdgeLabels: !massiveGraph.value && (
+        props.showEdgeLabels || Boolean(renderState.selectedEdge)
+      ),
       stagePadding: 24,
       zIndex: !massiveGraph.value,
       nodeReducer: massiveGraph.value && !needsInteractiveReducers() ? null : nodeReducer,
@@ -645,6 +838,8 @@ onMounted(async () => {
       event?.preventSigmaDefault?.()
       emit('select-edge', edge)
     })
+    renderer.on('afterRender', updateRenderedLabelCounts)
+    updateRenderedLabelCounts()
     container.value.addEventListener('wheel', handleMassiveWheel, {
       capture: true,
       passive: false,
@@ -690,6 +885,7 @@ onBeforeUnmount(() => {
   stopLayout({ kill: true })
   renderer?.kill()
   renderer = null
+  edgeLabelContext = null
   graph?.clear()
   graph = null
 })
@@ -720,6 +916,13 @@ defineExpose({
 
 .large-graph-view :deep(canvas) {
   touch-action: none;
+}
+
+.large-graph-edge-label-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .large-graph-view__message {
