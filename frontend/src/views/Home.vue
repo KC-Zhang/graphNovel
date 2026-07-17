@@ -8,6 +8,9 @@
       </div>
       <div class="nav-links">
         <LanguageSwitcher />
+        <a href="https://discord.gg/7hWqJ4abb7" target="_blank" rel="noopener" class="discord-link">
+          {{ $t('nav.visitDiscord') }} <span class="arrow">↗</span>
+        </a>
         <a href="https://github.com/KC-Zhang/graphNovel" target="_blank" rel="noopener" class="github-link">
           {{ $t('nav.visitGithub') }} <span class="arrow">↗</span>
         </a>
@@ -423,7 +426,8 @@ const startReading = () => {
   gap: 16px;
 }
 
-.github-link {
+.github-link,
+.discord-link {
   color: var(--white);
   text-decoration: none;
   font-family: var(--font-mono);
@@ -435,7 +439,8 @@ const startReading = () => {
   transition: opacity 0.2s;
 }
 
-.github-link:hover {
+.github-link:hover,
+.discord-link:hover {
   opacity: 0.8;
 }
 

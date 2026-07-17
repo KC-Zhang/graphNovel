@@ -38,6 +38,13 @@ class Project:
     # 书籍信息
     language: Optional[str] = None  # 检测到的书籍语言（用于图谱语言锁定）
     episodes: List[Dict[str, Any]] = field(default_factory=list)  # 章节元数据（不含正文）
+    # 源文档与阅读模式。旧项目缺少这些字段时保持可加载。
+    source_format: Optional[str] = None
+    reading_mode: Optional[str] = None  # chapter | page | None (待用户选择)
+    document_kind: Optional[str] = None  # novel | textbook | uncertain
+    classification_confidence: Optional[float] = None
+    page_count: int = 0
+    chapter_detection_status: Optional[str] = None
     
     # 图谱抽取信息
     extract_task_id: Optional[str] = None
@@ -59,6 +66,12 @@ class Project:
             "files": self.files,
             "total_text_length": self.total_text_length,
             "language": self.language,
+            "source_format": self.source_format,
+            "reading_mode": self.reading_mode,
+            "document_kind": self.document_kind,
+            "classification_confidence": self.classification_confidence,
+            "page_count": self.page_count,
+            "chapter_detection_status": self.chapter_detection_status,
             "episode_count": len(self.episodes or []),
             "extract_task_id": self.extract_task_id,
             "extracted_upto": self.extracted_upto,
@@ -86,6 +99,12 @@ class Project:
             total_text_length=data.get('total_text_length', 0),
             language=data.get('language'),
             episodes=data.get('episodes', []),
+            source_format=data.get('source_format'),
+            reading_mode=data.get('reading_mode'),
+            document_kind=data.get('document_kind'),
+            classification_confidence=data.get('classification_confidence'),
+            page_count=data.get('page_count', 0),
+            chapter_detection_status=data.get('chapter_detection_status'),
             extract_task_id=data.get('extract_task_id'),
             extracted_upto=data.get('extracted_upto', -1),
             failed_episodes=data.get('failed_episodes', []),
@@ -128,6 +147,11 @@ class ProjectManager:
     def _get_episodes_path(cls, project_id: str) -> str:
         """获取章节数据（含正文）存储路径"""
         return os.path.join(cls._get_project_dir(project_id), 'episodes.json')
+
+    @classmethod
+    def _get_pdf_document_path(cls, project_id: str) -> str:
+        """获取 PDF 逐页文本/版式元数据路径。"""
+        return os.path.join(cls._get_project_dir(project_id), 'pdf_document.json')
     
     @classmethod
     def _get_graph_path(cls, project_id: str) -> str:
@@ -305,6 +329,22 @@ class ProjectManager:
     def get_episodes(cls, project_id: str) -> Optional[List[Dict[str, Any]]]:
         """读取章节数据（含正文）"""
         path = cls._get_episodes_path(project_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    @classmethod
+    def save_pdf_document(cls, project_id: str, document: Dict[str, Any]) -> None:
+        """保存 PDF 逐页文本和版式元数据；原始 PDF 仍保存在 files/ 中。"""
+        path = cls._get_pdf_document_path(project_id)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(document, f, ensure_ascii=False)
+
+    @classmethod
+    def get_pdf_document(cls, project_id: str) -> Optional[Dict[str, Any]]:
+        """读取已持久化的 PDF 逐页元数据。"""
+        path = cls._get_pdf_document_path(project_id)
         if not os.path.exists(path):
             return None
         with open(path, 'r', encoding='utf-8') as f:

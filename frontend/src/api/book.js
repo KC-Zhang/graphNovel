@@ -18,6 +18,21 @@ export function uploadBook(formData) {
   )
 }
 
+/** Rebuild a newly uploaded PDF as chapter or physical-page episodes. */
+export function setReadingMode(projectId, mode) {
+  return service({
+    url: `/api/graph/project/${projectId}/reading-mode`,
+    method: 'post',
+    data: { mode }
+  })
+}
+
+/** Direct PDF URL used by PDF.js (the backend supports byte-range requests). */
+export function getPdfSourceUrl(projectId) {
+  const base = String(service.defaults.baseURL || '').replace(/\/$/, '')
+  return `${base}/api/graph/project/${encodeURIComponent(projectId)}/source`
+}
+
 /**
  * 确保章节 0..upto 已（或正在）被抽取（按需增量、可重复调用以抬高目标）
  * @param {String} projectId

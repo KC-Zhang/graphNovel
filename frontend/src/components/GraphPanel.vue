@@ -52,9 +52,9 @@
               <div
                 class="legend-item"
                 v-for="type in entityTypes"
-                :key="type.name"
-                :class="{ active: activeType === type.name }"
-                @click="highlightType(type.name)"
+                :key="type.key"
+                :class="{ active: activeType === type.key }"
+                @click="highlightType(type.key)"
               >
                 <span class="legend-dot" :style="{ background: type.color }"></span>
                 <span class="legend-label">{{ type.name }}</span>
@@ -134,10 +134,22 @@
                   @mouseenter="setActiveReel(i, { scroll: false })"
                   @click="setActiveReel(i)"
                 >
-                  <div class="reel-item-relation">
-                    <span class="reel-dir">{{ er.outgoing ? '→' : '←' }}</span>
-                    <span class="reel-label">{{ er.edge.label }}</span>
-                    <span class="reel-neighbor">{{ er.neighborName }}</span>
+                  <div
+                    class="relationship-statement compact"
+                    :aria-label="`${er.sourceName} ${er.edge.label} ${er.targetName}`"
+                  >
+                    <span class="relationship-part endpoint">
+                      <small>{{ $t('graph.sourceEntity') }}</small>
+                      <strong>{{ er.sourceName }}</strong>
+                    </span>
+                    <span class="relationship-part predicate">
+                      <small>{{ $t('graph.relationshipLabel') }}</small>
+                      <strong>{{ er.edge.label }}</strong>
+                    </span>
+                    <span class="relationship-part endpoint">
+                      <small>{{ $t('graph.targetEntity') }}</small>
+                      <strong>{{ er.targetName }}</strong>
+                    </span>
                   </div>
                   <div class="reel-fact" v-if="er.edge.fact">{{ er.edge.fact }}</div>
                   <div
@@ -183,8 +195,22 @@
 
           <!-- 边详情 -->
           <div v-else class="detail-content">
-            <div class="edge-relation-header">
-              {{ selectedItem.sourceName }} <span class="edge-arrow">→ {{ selectedItem.edge.label }} →</span> {{ selectedItem.targetName }}
+            <div
+              class="relationship-statement"
+              :aria-label="`${selectedItem.sourceName} ${selectedItem.edge.label} ${selectedItem.targetName}`"
+            >
+              <span class="relationship-part endpoint">
+                <small>{{ $t('graph.sourceEntity') }}</small>
+                <strong>{{ selectedItem.sourceName }}</strong>
+              </span>
+              <span class="relationship-part predicate">
+                <small>{{ $t('graph.relationshipLabel') }}</small>
+                <strong>{{ selectedItem.edge.label }}</strong>
+              </span>
+              <span class="relationship-part endpoint">
+                <small>{{ $t('graph.targetEntity') }}</small>
+                <strong>{{ selectedItem.targetName }}</strong>
+              </span>
             </div>
             <div class="node-desc" v-if="selectedItem.edge.fact">{{ selectedItem.edge.fact }}</div>
             <div class="mentions book-mentions" v-if="selectedMentions.length">
@@ -251,6 +277,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons'
 import { graphDensityMessage, shouldAutoHideEdgeLabels } from '../utils/graphPerformance'
 import { GRAPH_SCOPES, normalizeGraphScope, scopeAllowsMention } from '../utils/readerLinks'
+import { colorForEntityType, entityTypeKey, groupEntityTypes } from '../utils/entityTypes'
 
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
@@ -409,21 +436,9 @@ const nodeById = computed(() => {
   return m
 })
 
-const entityTypes = computed(() => {
-  const typeMap = {}
-  visibleNodes.value.forEach(node => {
-    const type = node.type || '—'
-    if (!typeMap[type]) {
-      typeMap[type] = { name: type, color: COLORS[Object.keys(typeMap).length % COLORS.length] }
-    }
-  })
-  return Object.values(typeMap)
-})
+const entityTypes = computed(() => groupEntityTypes(visibleNodes.value, COLORS))
 
-const colorForType = (type) => {
-  const t = entityTypes.value.find(e => e.name === (type || '—'))
-  return t ? t.color : '#999'
-}
+const colorForType = (type) => colorForEntityType(type, entityTypes.value)
 
 const toggleEdgeLabels = () => {
   showEdgeLabels.value = !showEdgeLabels.value
@@ -478,7 +493,9 @@ const nodeEdges = computed(() => {
         edge: e,
         outgoing,
         neighborId,
-        neighborName: nodeById.value[neighborId]?.name || '—'
+        neighborName: nodeById.value[neighborId]?.name || '—',
+        sourceName: nodeById.value[e.source]?.name || '—',
+        targetName: nodeById.value[e.target]?.name || '—',
       })
     }
   })
@@ -567,7 +584,7 @@ const applyTypeHighlight = () => {
   if (!nodeSel || !activeType.value) return
   const matchIds = new Set(
     visibleNodes.value
-      .filter(n => (n.type || '—') === activeType.value)
+      .filter(n => entityTypeKey(n.type) === activeType.value)
       .map(n => n.id)
   )
   const edgeVisible = (d) => matchIds.has(d.source.id) && matchIds.has(d.target.id)
@@ -1025,7 +1042,9 @@ onUnmounted(() => {
   position: absolute;
   top: 0; left: 0; right: 0;
   padding: 12px 20px;
-  z-index: 10;
+  /* Navigation tools must remain reachable when a narrow layout lets the
+     relationship detail card overlap the wrapped toolbar. */
+  z-index: 30;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1149,11 +1168,30 @@ onUnmounted(() => {
 }
 .mentions-list { margin-top: 2px; }
 
-.edge-relation-header {
-  background: #F8F8F8; padding: 12px; border-radius: 8px; margin-bottom: 12px;
-  font-size: 13px; font-weight: 500; color: #333; line-height: 1.5; word-break: break-word;
+.relationship-statement {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, auto) minmax(0, 1fr);
+  gap: 8px; align-items: stretch; margin-bottom: 12px;
 }
-.edge-arrow { color: #7B2D8E; }
+.relationship-part {
+  min-width: 0; padding: 9px 8px; border: 1px solid #E8E8E8;
+  border-radius: 7px; background: #F8F8F8; text-align: center;
+}
+.relationship-part small {
+  display: block; margin-bottom: 3px; color: #999;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+}
+.relationship-part strong {
+  display: block; color: #222; font-size: 12px; line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.relationship-part.predicate { border-color: #DCCBE5; background: #F8F1FB; }
+.relationship-part.predicate strong { color: #7B2D8E; }
+.relationship-statement.compact { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.relationship-statement.compact .relationship-part {
+  display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 6px;
+  align-items: center; padding: 6px 8px; text-align: left;
+}
+.relationship-statement.compact .relationship-part small { margin: 0; }
 
 /* Edge Reel */
 .edge-reel { margin-top: 14px; border-top: 1px solid #F0F0F0; padding-top: 8px; }
@@ -1168,10 +1206,6 @@ onUnmounted(() => {
 .reel-item.active {
   border-color: #E91E63; background: #FFF5F8; box-shadow: 0 2px 10px rgba(233,30,99,0.12);
 }
-.reel-item-relation { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.reel-dir { color: #E91E63; font-weight: 700; }
-.reel-label { font-size: 12px; font-weight: 600; color: #7B2D8E; }
-.reel-neighbor { font-size: 13px; font-weight: 600; color: #222; }
 .reel-fact { font-size: 12px; color: #555; line-height: 1.5; }
 .reel-quote {
   margin-top: 6px; font-size: 12px; color: #666; line-height: 1.5;

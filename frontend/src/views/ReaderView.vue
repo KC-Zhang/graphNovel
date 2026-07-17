@@ -63,8 +63,8 @@
     <div v-if="showChapters" class="chapters-overlay" @click.self="showChapters = false">
       <div class="chapters-drawer">
         <div class="chapters-head">
-          <span>{{ $t('reader.chapters') }}</span>
-          <span class="chapters-progress">{{ $t('reader.chaptersRead', { read: readCount, total: episodes.length }) }}</span>
+          <span>{{ episodeUnitLabel }}</span>
+          <span class="chapters-progress">{{ episodeProgressLabel }}</span>
           <button class="detail-close" @click="showChapters = false">×</button>
         </div>
         <div class="chapters-list">
@@ -88,10 +88,41 @@
       <div class="status-card" :class="{ wide: phase === 'review' }">
         <template v-if="phase === 'review'">
           <div class="review-head">
-            <div class="review-title">{{ $t('reader.reviewChapters') }}</div>
-            <div class="review-desc">{{ $t('reader.reviewChaptersDesc', { count: episodes.length }) }}</div>
+            <div class="review-title">{{ $t('reader.reviewStructure') }}</div>
+            <div class="review-desc">{{ reviewDescription }}</div>
+          </div>
+          <div v-if="sourceFormat === 'pdf'" class="reading-mode-panel">
+            <div class="reading-mode-heading">
+              <span>{{ $t('reader.pdfReadingMode') }}</span>
+              <span v-if="documentKind !== 'uncertain'" class="detection-badge">
+                {{ $t('reader.detectedAs', { type: documentKindLabel }) }}
+              </span>
+              <span v-else class="detection-badge uncertain">{{ $t('reader.chooseModeRequired') }}</span>
+            </div>
+            <div class="reading-mode-switch" role="group" :aria-label="$t('reader.pdfReadingMode')">
+              <button
+                type="button"
+                :class="{ active: readingMode === 'chapter' }"
+                :disabled="modeChanging"
+                @click="changeReadingMode('chapter')"
+              >{{ $t('reader.byChapter') }}</button>
+              <button
+                type="button"
+                :class="{ active: readingMode === 'page' }"
+                :disabled="modeChanging"
+                @click="changeReadingMode('page')"
+              >{{ $t('reader.byPage') }}</button>
+            </div>
+            <p class="reading-mode-help">
+              {{ readingMode === 'page' ? $t('reader.pageModeHelp') : $t('reader.chapterModeHelp') }}
+            </p>
+            <p v-if="['unavailable', 'unreliable'].includes(chapterDetectionStatus) && readingMode === 'chapter'" class="mode-warning">
+              {{ $t('reader.chapterDetectionUnreliable') }}
+            </p>
           </div>
           <div class="chapter-preview-list">
+            <div v-if="modeChanging" class="chapter-preview-empty">{{ $t('reader.changingReadingMode') }}</div>
+            <div v-else-if="!episodes.length" class="chapter-preview-empty">{{ $t('reader.chooseModeToPreview') }}</div>
             <div v-for="ep in chapterPreviewItems" :key="ep.index" class="chapter-preview-item">
               <span class="chapter-preview-index">{{ ep.index + 1 }}</span>
               <span class="chapter-preview-title">{{ ep.title }}</span>
@@ -103,7 +134,7 @@
           </div>
           <div class="review-actions">
             <button class="retry-btn secondary" @click="goHome">{{ $t('reader.chooseFiles') }}</button>
-            <button class="retry-btn" @click="confirmChapterReview">{{ $t('reader.continueToReader') }}</button>
+            <button class="retry-btn" :disabled="!canConfirmReview" @click="confirmChapterReview">{{ $t('reader.continueToReader') }}</button>
           </div>
         </template>
         <template v-else>
@@ -120,7 +151,12 @@
     </div>
 
     <!-- 阅读主界面 -->
-    <div v-else class="reader-body" :class="{ 'graph-maximized': graphMaximized }" ref="readerBody">
+    <div
+      v-else
+      class="reader-body"
+      :class="{ 'graph-maximized': graphMaximized, 'single-pane': singlePane, 'showing-graph': activePane === 'graph' }"
+      ref="readerBody"
+    >
       <button
         v-if="navHistory.length"
         class="floating-reader-back"
@@ -134,10 +170,11 @@
       </button>
 
       <!-- 左：书籍面板 -->
-      <div v-show="!graphMaximized" class="book-pane" ref="bookPane" :style="{ width: splitPct + '%' }">
+      <div v-show="showBookPane" class="book-pane" ref="bookPane" :style="bookPaneStyle">
         <div class="episode-head">
           <div class="episode-title">{{ currentEpisodeTitle }}</div>
           <div class="episode-head-right">
+            <button v-if="singlePane" class="pane-action" @click="showGraphPane">{{ $t('reader.openGraph') }}</button>
             <button
               class="read-ring"
               :class="{ done: isEpisodeRead(viewEpisode) }"
@@ -160,12 +197,23 @@
 
         <div class="book-scroll">
           <div class="book-text" ref="bookText" @scroll="onBookScroll">
+            <PdfPageView
+              v-if="isPdfPageMode"
+              :source-url="pdfSourceUrl"
+              :page-number="currentPageNumber"
+              :highlight-text="currentHighlightText"
+              :links="episodeLinks"
+              @link-click="goToGraph"
+              @rendered="checkAutoRead"
+            />
             <p
+              v-else
               v-for="(para, i) in renderedParagraphs"
               :key="i"
               class="para"
+              :class="{ 'reader-heading': para.heading }"
             >
-              <template v-for="(seg, j) in para" :key="j">
+              <template v-for="(seg, j) in para.segments" :key="j">
                 <span
                   v-if="seg.link"
                   class="text-link"
@@ -213,7 +261,7 @@
           <div class="chapter-scrubber">
             <div class="chapter-scrubber-meta">
               <span class="chapter-scrubber-index">
-                {{ $t('reader.chapterPosition', { current: chapterSliderDisplay, total: episodes.length }) }}
+                {{ positionLabel }}
               </span>
               <span class="chapter-scrubber-title" :title="chapterSliderTitle">
                 {{ chapterSliderTitle }}
@@ -240,10 +288,10 @@
       </div>
 
       <!-- 拖拽调整左右比例 -->
-      <div v-show="!graphMaximized" class="pane-resizer" @mousedown="startResize"></div>
+      <div v-show="showResizer" class="pane-resizer" @mousedown="startResize"></div>
 
       <!-- 右：图谱面板 -->
-      <div class="graph-pane">
+      <div v-show="showGraph" class="graph-pane">
         <GraphPanel
           :graph-data="graphData"
           :view-episode="viewEpisode"
@@ -275,8 +323,10 @@ import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 import { faArrowLeft } from '@fortawesome/free-solid-svg-icons'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import GraphPanel from '../components/GraphPanel.vue'
+import PdfPageView from '../components/PdfPageView.vue'
 import {
-  uploadBook, ensureExtraction, getExtractStatus, getGraphData, getEpisode, getBook
+  uploadBook, ensureExtraction, getExtractStatus, getGraphData, getEpisode, getBook,
+  getPdfSourceUrl, setReadingMode
 } from '../api/book'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
@@ -289,6 +339,7 @@ import {
   scopeEpisodeLimit,
 } from '../utils/readerLinks'
 import { visibleInterval, isRangeCovered } from '../utils/readProgress'
+import { readerTextBlocks } from '../utils/readerText'
 import { clampRevealMax, latestReadableEpisode } from '../utils/revealProgress'
 import {
   normalizeSearchQuery,
@@ -308,7 +359,7 @@ const { t } = useI18n()
 // 阅读进度（localStorage 持久化）
 const {
   readEpisodes, seenEdges, episodeRanges, revealMax, viewEpisode,
-  load: loadProgress, markEpisodeRead, markEdgeSeen, isEpisodeRead,
+  load: loadProgress, clear: clearProgress, markEpisodeRead, markEdgeSeen, isEpisodeRead,
   getEpisodeRanges, addEpisodeRange, episodeCoverage
 } = useReadingProgress()
 
@@ -347,6 +398,8 @@ const readRingOffset = computed(() => {
 })
 const showChapters = ref(false)
 const graphMaximized = ref(false)
+const compactViewport = ref(window.innerWidth < 640)
+const activePane = ref('reader')
 const latestReachedEpisode = ref(0)
 const latestReadEpisode = computed(() => latestReadableEpisode({
   viewEpisode: viewEpisode.value,
@@ -360,6 +413,28 @@ const latestReadEpisode = computed(() => latestReadableEpisode({
 const SPLIT_KEY = 'bookmiro:splitPct'
 const splitPct = ref(Number(localStorage.getItem(SPLIT_KEY)) || 46)
 const readerBody = ref(null)
+const READER_MIN_WIDTH = 320
+const GRAPH_MIN_WIDTH = 320
+const COMPACT_BREAKPOINT = 640
+const singlePane = computed(() => compactViewport.value)
+const showBookPane = computed(() => !graphMaximized.value && (!singlePane.value || activePane.value === 'reader'))
+const showGraph = computed(() => graphMaximized.value || !singlePane.value || activePane.value === 'graph')
+const showResizer = computed(() => !graphMaximized.value && !singlePane.value)
+const bookPaneStyle = computed(() => singlePane.value ? { width: '100%' } : { width: `${splitPct.value}%` })
+
+const updateResponsiveLayout = () => {
+  const width = readerBody.value?.getBoundingClientRect().width || window.innerWidth
+  const nextCompact = width < COMPACT_BREAKPOINT
+  const enteringCompact = nextCompact && !compactViewport.value
+  compactViewport.value = nextCompact
+  if (enteringCompact) activePane.value = 'reader'
+}
+
+const showGraphPane = () => {
+  activePane.value = 'graph'
+  nextTick(() => window.dispatchEvent(new Event('resize')))
+}
+
 const startResize = (e) => {
   e.preventDefault()
   const body = readerBody.value
@@ -368,8 +443,10 @@ const startResize = (e) => {
   document.body.style.cursor = 'col-resize'
   const onMove = (ev) => {
     const rect = body.getBoundingClientRect()
-    const pct = ((ev.clientX - rect.left) / rect.width) * 100
-    splitPct.value = Math.min(75, Math.max(25, pct))
+    const proposedWidth = ev.clientX - rect.left
+    const maxReaderWidth = Math.max(READER_MIN_WIDTH, rect.width - GRAPH_MIN_WIDTH - 6)
+    const clampedWidth = Math.max(READER_MIN_WIDTH, Math.min(maxReaderWidth, proposedWidth))
+    splitPct.value = (clampedWidth / rect.width) * 100
   }
   const onUp = () => {
     window.removeEventListener('mousemove', onMove)
@@ -413,6 +490,7 @@ const pushNavSnapshot = () => {
 const goToGraph = (link) => {
   pushNavSnapshot()
   selectRequest.value = { type: link.type, id: link.id, nonce: Date.now() }
+  if (singlePane.value) showGraphPane()
 }
 const linkTitle = (link) => `${t('reader.viewInGraph')}: ${link.name}`
 // 节点已读状态由其（已揭示的）关系派生：无关系视为已读；所有关系已读则已读
@@ -448,6 +526,34 @@ const projectId = ref(props.projectId)
 const bookName = ref('')
 const language = ref('')
 const episodes = ref([])
+const sourceFormat = ref('')
+const readingMode = ref(null)
+const documentKind = ref('uncertain')
+const classificationConfidence = ref(0)
+const pageCount = ref(0)
+const chapterDetectionStatus = ref('')
+const modeChanging = ref(false)
+const isPdfPageMode = computed(() => sourceFormat.value === 'pdf' && readingMode.value === 'page')
+const pdfSourceUrl = computed(() => projectId.value && projectId.value !== 'new' ? getPdfSourceUrl(projectId.value) : '')
+const currentPageNumber = computed(() => episodes.value[viewEpisode.value]?.page_number || viewEpisode.value + 1)
+const documentKindLabel = computed(() => t(`reader.documentKind.${documentKind.value || 'uncertain'}`))
+const episodeUnitLabel = computed(() => isPdfPageMode.value ? t('reader.pages') : t('reader.chapters'))
+const episodeProgressLabel = computed(() => isPdfPageMode.value
+  ? t('reader.pagesRead', { read: readCount.value, total: episodes.value.length })
+  : t('reader.chaptersRead', { read: readCount.value, total: episodes.value.length }))
+const positionLabel = computed(() => isPdfPageMode.value
+  ? t('reader.pagePosition', { current: chapterSliderDisplay.value, total: episodes.value.length })
+  : t('reader.chapterPosition', { current: chapterSliderDisplay.value, total: episodes.value.length }))
+const reviewDescription = computed(() => {
+  if (!readingMode.value) return t('reader.chooseModeToContinue')
+  return isPdfPageMode.value
+    ? t('reader.reviewPagesDesc', { count: episodes.value.length })
+    : t('reader.reviewChaptersDesc', { count: episodes.value.length })
+})
+const canConfirmReview = computed(() =>
+  !!readingMode.value && episodes.value.length > 0 && !modeChanging.value &&
+  !(readingMode.value === 'chapter' && ['unavailable', 'unreliable'].includes(chapterDetectionStatus.value))
+)
 
 const graphData = ref({ nodes: [], edges: [] })
 
@@ -531,6 +637,11 @@ const highlightRange = computed(() => {
   if (!highlightQuote.value) return null
   return findQuoteRange(currentText.value || '', highlightQuote.value)
 })
+const currentHighlightText = computed(() => {
+  const range = highlightRange.value
+  if (range && range.end > range.start) return currentText.value.slice(range.start, range.end)
+  return highlightQuote.value || ''
+})
 
 const graphMentionIndex = computed(() => createMentionIndex(graphData.value, {
   scope: graphScope.value,
@@ -547,7 +658,15 @@ const episodeLinks = computed(() => {
   for (const item of graphMentionIndex.value.get(ep) || []) {
     const range = findQuoteRange(text, item.quote)
     if (range) {
-      links.push({ start: range.start, end: range.end, type: item.type, id: item.id, name: item.name })
+      links.push({
+        start: range.start,
+        end: range.end,
+        type: item.type,
+        id: item.id,
+        name: item.name,
+        quote: item.quote,
+        seen: linkSeen(item),
+      })
     }
   }
   // 重叠时优先节点
@@ -561,12 +680,13 @@ const renderedParagraphs = computed(() => {
   const range = highlightRange.value
   const links = episodeLinks.value
   const paras = []
-  let offset = 0
-  for (const line of text.split('\n')) {
-    const pStart = offset
-    const pEnd = offset + line.length
-    offset = pEnd + 1 // 计入换行符
-    if (line.trim().length === 0) continue
+  const blocks = readerTextBlocks(text, {
+    reflow: sourceFormat.value === 'pdf' && readingMode.value === 'chapter',
+  })
+  for (const block of blocks) {
+    const line = block.text
+    const pStart = block.start
+    const pEnd = block.end
     const len = line.length
 
     // 本段内的链接区间（转为局部坐标）
@@ -583,7 +703,7 @@ const renderedParagraphs = computed(() => {
     }
 
     if (local.length === 0 && hs < 0) {
-      paras.push([{ text: line, mark: false, link: null }])
+      paras.push({ heading: block.heading, segments: [{ text: line, mark: false, link: null }] })
       continue
     }
 
@@ -603,7 +723,7 @@ const renderedParagraphs = computed(() => {
       const cover = local.find(l => l.s <= a && l.e >= b)
       segs.push({ text: txt, mark, link: cover ? cover.link : null })
     }
-    paras.push(segs)
+    paras.push({ heading: block.heading, segments: segs })
   }
   return paras
 })
@@ -628,6 +748,11 @@ const scrollToHighlight = () => {
 const goHome = () => router.push({ name: 'Home' })
 
 const toggleGraphMaximized = () => {
+  if (singlePane.value) {
+    activePane.value = activePane.value === 'graph' ? 'reader' : 'graph'
+    nextTick(() => window.dispatchEvent(new Event('resize')))
+    return
+  }
   graphMaximized.value = !graphMaximized.value
   nextTick(() => window.dispatchEvent(new Event('resize')))
 }
@@ -637,15 +762,36 @@ const openSearch = () => {
 }
 
 const confirmChapterReview = async () => {
-  if (!episodes.value.length) {
+  if (!canConfirmReview.value) {
     errorText.value = t('reader.noEpisodes')
-    phase.value = 'error'
     return
   }
   phase.value = 'ready'
   await setViewEpisode(0)
   // 阅读就绪后即在后台抽取整本书的图谱
   ensureAhead()
+}
+
+const changeReadingMode = async (mode) => {
+  if (sourceFormat.value !== 'pdf' || modeChanging.value || readingMode.value === mode) return
+  modeChanging.value = true
+  errorText.value = ''
+  try {
+    const res = await setReadingMode(projectId.value, mode)
+    const data = res.data || {}
+    readingMode.value = data.reading_mode || mode
+    chapterDetectionStatus.value = data.chapter_detection_status || ''
+    episodes.value = data.episodes || []
+    pageCount.value = data.page_count || pageCount.value
+    episodeTextCache.clear()
+    currentText.value = ''
+    clearProgress(projectId.value)
+    syncChapterSliderToView()
+  } catch (e) {
+    errorText.value = e.message || t('reader.modeChangeFailed')
+  } finally {
+    modeChanging.value = false
+  }
 }
 
 // ---------- 章节文本加载 ----------
@@ -812,7 +958,7 @@ const markCoveredEdges = (el) => {
   const h = el.scrollHeight
   if (!h) return
   const ranges = getEpisodeRanges(viewEpisode.value)
-  el.querySelectorAll('.text-link.link-edge').forEach(node => {
+  el.querySelectorAll('.text-link.link-edge, .pdf-text-link.pdf-link-edge').forEach(node => {
     const id = node.getAttribute('data-edge-id')
     if (!id || seenEdges.value.has(id)) return
     const top = node.offsetTop / h
@@ -846,6 +992,7 @@ const goBack = async () => {
   const snap = navHistory.value.pop()
   isRestoring = true
   try {
+    if (singlePane.value) activePane.value = 'reader'
     if (snap.viewEpisode !== viewEpisode.value) {
       cancelDwell()
       viewEpisode.value = Math.max(0, Math.min(snap.viewEpisode, episodes.value.length - 1))
@@ -951,6 +1098,7 @@ const selectSearchResult = async (result, index = searchResults.value.indexOf(re
 
   if (result.kind === 'body') {
     if (graphMaximized.value) toggleGraphMaximized()
+    if (singlePane.value) activePane.value = 'reader'
     highlightQuote.value = ''
     if (result.episode !== viewEpisode.value) {
       await setViewEpisode(result.episode)
@@ -982,6 +1130,8 @@ const onSearchDocumentMouseDown = (e) => {
 // 从图谱跳转到原文
 const onJump = async ({ episode, quote }) => {
   pushNavSnapshot()
+  if (singlePane.value) activePane.value = 'reader'
+  if (graphMaximized.value) graphMaximized.value = false
   if (episode !== viewEpisode.value) {
     const previousEpisode = viewEpisode.value
     viewEpisode.value = Math.max(0, Math.min(episode, episodes.value.length - 1))
@@ -1096,6 +1246,17 @@ const applyBookMeta = (data) => {
   bookName.value = data.name || ''
   language.value = data.language || ''
   episodes.value = data.episodes || []
+  sourceFormat.value = data.source_format || inferSourceFormat(data.files)
+  readingMode.value = data.reading_mode || (sourceFormat.value === 'pdf' && !(data.episodes || []).length ? null : 'chapter')
+  documentKind.value = data.document_kind || 'uncertain'
+  classificationConfidence.value = Number(data.classification_confidence) || 0
+  pageCount.value = Number(data.page_count) || 0
+  chapterDetectionStatus.value = data.chapter_detection_status || ''
+}
+
+const inferSourceFormat = (files = []) => {
+  const filename = files?.[0]?.filename || ''
+  return filename.includes('.') ? filename.split('.').pop().toLowerCase() : ''
 }
 
 const initExisting = async () => {
@@ -1109,9 +1270,17 @@ const initExisting = async () => {
       return
     }
     applyBookMeta(res.data)
-    if (!episodes.value.length) {
+    if (!episodes.value.length && !(
+      sourceFormat.value === 'pdf' &&
+      (!readingMode.value || ['unavailable', 'unreliable'].includes(chapterDetectionStatus.value))
+    )) {
       errorText.value = t('reader.noEpisodes')
       phase.value = 'error'
+      return
+    }
+    if (!episodes.value.length && sourceFormat.value === 'pdf') {
+      phase.value = 'review'
+      statusMessage.value = t('reader.reviewStructure')
       return
     }
     loadProgress(projectId.value)  // 恢复已读进度与阅读位置
@@ -1157,7 +1326,10 @@ const initNew = async () => {
     clearPendingUpload()
     projectId.value = res.data.project_id
     applyBookMeta(res.data)
-    if (!episodes.value.length) {
+    if (!episodes.value.length && !(
+      sourceFormat.value === 'pdf' &&
+      (!readingMode.value || ['unavailable', 'unreliable'].includes(chapterDetectionStatus.value))
+    )) {
       errorText.value = t('reader.noEpisodes')
       phase.value = 'error'
       return
@@ -1203,8 +1375,15 @@ watch(() => graphData.value, () => {
   if (normalizeSearchQuery(searchQuery.value)) scheduleSearch()
 }, { deep: false })
 
+watch(phase, async (value) => {
+  if (value !== 'ready') return
+  await nextTick()
+  updateResponsiveLayout()
+})
+
 onMounted(() => {
   document.addEventListener('mousedown', onSearchDocumentMouseDown)
+  window.addEventListener('resize', updateResponsiveLayout)
   if (props.projectId === 'new') {
     initNew()
   } else {
@@ -1214,6 +1393,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onSearchDocumentMouseDown)
+  window.removeEventListener('resize', updateResponsiveLayout)
   if (searchTimer) clearTimeout(searchTimer)
   if (pollTimer) clearTimeout(pollTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
@@ -1366,12 +1546,32 @@ onUnmounted(() => {
   border-radius: 6px; cursor: pointer; font-weight: 600;
 }
 .retry-btn:hover { background: #FF4500; }
+.retry-btn:disabled { opacity: 0.45; cursor: not-allowed; background: #777; }
 .retry-btn.secondary { background: #fff; color: #333; border: 1px solid #ddd; }
 .retry-btn.secondary:hover { border-color: #FF4500; color: #FF4500; }
 
 .review-head { margin-bottom: 18px; }
 .review-title { font-size: 20px; font-weight: 700; color: #111; margin-bottom: 6px; }
 .review-desc { font-size: 13px; color: #666; line-height: 1.6; }
+.reading-mode-panel {
+  margin-bottom: 16px; padding: 14px; border: 1px solid #e5e5e5;
+  border-radius: 9px; background: #fff;
+}
+.reading-mode-heading { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; }
+.detection-badge {
+  margin-left: auto; padding: 3px 8px; border-radius: 999px;
+  color: #1A6B3C; background: #E9F7EF; font-size: 11px; font-weight: 600;
+}
+.detection-badge.uncertain { color: #8A4B08; background: #FFF3E0; }
+.reading-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+.reading-mode-switch button {
+  height: 38px; border: 1px solid #ddd; border-radius: 7px;
+  background: #fafafa; color: #444; cursor: pointer; font-weight: 700;
+}
+.reading-mode-switch button.active { border-color: #FF4500; background: #FFF3E0; color: #C53600; }
+.reading-mode-switch button:disabled { opacity: 0.55; cursor: wait; }
+.reading-mode-help { margin: 9px 0 0; color: #777; font-size: 12px; line-height: 1.5; }
+.mode-warning { margin: 9px 0 0; color: #B3261E; font-size: 12px; font-weight: 600; }
 .chapter-preview-list {
   max-height: 360px; overflow-y: auto; border: 1px solid #eee;
   border-radius: 8px; background: #fafafa;
@@ -1395,6 +1595,7 @@ onUnmounted(() => {
   padding: 12px; text-align: center; font-size: 12px; color: #777;
   background: #fff;
 }
+.chapter-preview-empty { padding: 32px 16px; text-align: center; color: #777; font-size: 13px; }
 .review-actions {
   display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;
 }
@@ -1440,10 +1641,12 @@ onUnmounted(() => {
   opacity: 1; transform: scale(1);
 }
 .book-pane {
-  width: 46%; min-width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
+  width: 46%; min-width: 320px; flex-shrink: 0; display: flex; flex-direction: column;
   min-height: 0;
 }
 .graph-pane { flex: 1; min-width: 0; }
+.reader-body.single-pane .book-pane,
+.reader-body.single-pane .graph-pane { width: 100%; min-width: 0; flex: 1 1 100%; }
 
 /* 左右分栏拖拽手柄 */
 .pane-resizer {
@@ -1458,6 +1661,13 @@ onUnmounted(() => {
 }
 .episode-title { font-size: 20px; font-weight: 700; color: #111; }
 .episode-head-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.pane-action {
+  height: 30px; padding: 0 10px; border: none; border-radius: 6px;
+  background: #111; color: #fff; cursor: pointer; font-size: 11px; font-weight: 700;
+}
+.pane-action:hover { background: #FF4500; }
+.pane-action.secondary { color: #444; background: #f1f1f1; }
+.pane-action.secondary:hover { color: #fff; background: #555; }
 /* 当前章节已读进度环（点击可切换整章已读/未读） */
 .read-ring {
   position: relative; width: 34px; height: 34px; padding: 0; border: none;
@@ -1490,6 +1700,7 @@ onUnmounted(() => {
   font-family: 'Noto Serif SC', 'Georgia', serif;
   scrollbar-width: none; -ms-overflow-style: none;
 }
+.book-text:has(.pdf-page-view) { padding: 8px 12px 24px; background: #e9e9e9; }
 .book-text::-webkit-scrollbar { width: 0; height: 0; }
 
 /* 阅读进度轨（“我读到哪了”，可点击/拖拽滚动） */
@@ -1508,7 +1719,8 @@ onUnmounted(() => {
   background: rgba(255,69,0,0.55); border-radius: 5px; pointer-events: none;
   transition: top 0.1s linear, height 0.1s linear;
 }
-.para { margin: 0 0 1.1em; text-align: justify; }
+.para { margin: 0 0 1.1em; text-align: justify; white-space: normal; overflow-wrap: break-word; }
+.para.reader-heading { margin: 1.25em 0 0.7em; font-weight: 750; text-align: left; }
 .text-link { cursor: pointer; border-radius: 2px; transition: background 0.15s; }
 /* 未读：醒目（实线 + 淡色底），节点用紫色、关系用粉色 */
 .text-link.link-unseen {
@@ -1573,4 +1785,13 @@ onUnmounted(() => {
   width: 100%; height: 16px; margin: 0; accent-color: #FF4500; cursor: pointer;
 }
 .chapter-slider:disabled { opacity: 0.45; cursor: not-allowed; }
+
+@media (max-width: 639px) {
+  .reader-nav { padding: 0 10px; }
+  .lang-badge { display: none; }
+  .search-input-wrap { width: min(220px, 38vw); }
+  .episode-head { padding: 14px 16px 8px; align-items: center; }
+  .episode-title { min-width: 0; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .book-text { padding-left: 18px; padding-right: 18px; }
+}
 </style>

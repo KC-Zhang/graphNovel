@@ -38,6 +38,25 @@ class UnexpectedFallbackLLM:
         raise AssertionError("fallback should only be called after primary failure")
 
 
+class EntityTypeLLM:
+    def __init__(self, entity_types):
+        self.entity_types = iter(entity_types)
+        self.calls = 0
+
+    def chat_json(self, messages, **kwargs):
+        self.calls += 1
+        return {
+            "entities": [{
+                "name": f"Entity {self.calls}",
+                "type": next(self.entity_types),
+                "aliases": [],
+                "description": "",
+                "quote": "entity",
+            }],
+            "relations": [],
+        }
+
+
 def test_long_episode_is_extracted_in_small_section_sized_chunks():
     llm = RecordingLLM()
     extractor = GraphExtractor(llm_client=llm)
@@ -121,3 +140,40 @@ def test_default_fallback_client_is_created_lazily(monkeypatch):
     assert result["failed_chunks"] == 0
     assert result["error"] is None
     assert created_fallbacks == []
+
+
+def test_fresh_extraction_canonicalizes_entity_type_case_and_whitespace():
+    llm = EntityTypeLLM(["Concept", " concept ", "CONCEPT"])
+    extractor = GraphExtractor(llm_client=llm)
+
+    for index in range(3):
+        extractor.extract_episode({"index": index, "text": f"Entity {index}"}, "English")
+
+    assert [node["type"] for node in extractor.to_graph()["nodes"]] == [
+        "Concept", "Concept", "Concept"
+    ]
+
+
+def test_loaded_graph_and_later_extraction_share_first_seen_type_label():
+    llm = EntityTypeLLM(["cOnCePt"])
+    extractor = GraphExtractor(llm_client=llm)
+    extractor.load_graph({
+        "nodes": [
+            {"id": "n1", "name": "A", "type": "concept"},
+            {"id": "n2", "name": "B", "type": "Concept"},
+            {"id": "n3", "name": "C", "type": " CONCEPT "},
+        ],
+        "edges": [],
+    })
+
+    extractor.extract_episode({"index": 3, "text": "Entity 4"}, "English")
+
+    assert [node["type"] for node in extractor.to_graph()["nodes"]] == [
+        "concept", "concept", "concept", "concept"
+    ]
+
+
+def test_entity_type_key_uses_collapsed_whitespace_and_unicode_casefold():
+    assert GraphExtractor._normalize_type_key("  Data\t  Model ") == "data model"
+    assert GraphExtractor._normalize_type_key("Straße") == "strasse"
+    assert GraphExtractor._normalize_type_key("STRASSE") == "strasse"

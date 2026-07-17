@@ -101,7 +101,7 @@ export const searchGraphData = (graphData, query) => {
     return [{
       kind: 'edge',
       id: edge.id,
-      title: [sourceName, edge.label || 'relationship', targetName].filter(Boolean).join(' -> '),
+      title: [sourceName, edge.label || 'relationship', targetName].filter(Boolean).join(' — '),
       subtitle: 'Relationship',
       snippet: makeSnippet(match.text, match.start, match.end),
       matchField: match.field,

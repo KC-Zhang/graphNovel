@@ -6,10 +6,13 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - `backend/app/utils/llm_client.py` - OpenAI-compatible chat client, JSON parsing, and optional OpenRouter fallback client.
 - `backend/app/utils/file_parser.py` - PDF/EPUB/Markdown/TXT text extraction, EPUB spine reading, and EPUB TOC-based episode extraction.
+- `backend/app/services/document_classifier.py` - PDF novel/textbook/uncertain classification from a bounded 2000-character sample.
+- `backend/app/services/pdf_segmenter.py` - physical-page episodes and page-aware PDF outline/layout chapter segmentation.
 - `backend/app/services/graph_extractor.py` - chapter/chunk entity extraction, entity merge rules, graph construction, and fallback retry use.
 - `backend/app/services/extraction_manager.py` - per-project background extraction worker, failed episode tracking, and retry scheduling.
 - `backend/app/api/graph.py` - upload/project/episode/graph/extraction API routes.
 - `frontend/src/views/ReaderView.vue` - reader shell, chapter navigation, read progress, extraction status polling, and retry action wiring.
+- `frontend/src/components/PdfPageView.vue` - PDF.js canvas/text-layer rendering, search highlights, and graph mention overlays.
 - `frontend/src/components/GraphPanel.vue` - graph visualization, extraction banners, retry button, graph reveal controls, and detail panels.
 - `locales/en.json`, `locales/zh.json` - UI strings for the reader, graph panel, and operational states.
 - `render.yaml` - Render production deployment blueprint for backend, frontend, disk, and required secrets.
@@ -23,6 +26,8 @@ This file is a living index for future agents working in this repo. Update it wh
 - Extraction failure display in the graph panel with a user-visible retry button and a retrying state.
 - OpenRouter fallback for failed primary LLM extraction calls using hardcoded `deepseek/deepseek-v3.2`.
 - EPUB uploads can use structured NCX/EPUB navigation to build reader episodes before falling back to flattened-text segmentation.
+- PDF uploads support pre-extraction chapter/page selection; page mode preserves physical pages, images, and layout while keeping search, progress, and graph jumps.
+- Entity types are grouped with whitespace-normalized Unicode casefold keys while preserving the first-seen display spelling.
 
 ## Decisions
 
@@ -37,6 +42,12 @@ This file is a living index for future agents working in this repo. Update it wh
 - Deterministic fallback segmentation chooses heading runs by `tiktoken` token-span scoring without book-specific TOC rules.
 - Upload/repair use an LLM-guided segmentation wrapper first: the LLM only infers heading/title structure from an early sample, while deterministic code still finds full-book offsets and falls back on failure.
 - EPUB upload prefers whole-document TOC/nav targets and ignores nested `#anchor` section entries plus packaging pages such as Contents, Notes, Bibliography, copyright, and acknowledgments.
+- PDF classification sends at most the first 2000 non-empty extracted characters to the LLM. Textbooks/papers default to page mode, novels to chapter mode, and uncertain results require user selection.
+- PDF page mode keeps one episode per physical page, including image-only pages. Original PDFs are streamed through a project-scoped Range/conditional endpoint for PDF.js.
+- PDF reading mode can change only before graph extraction starts; existing PDF projects are not migrated automatically.
+- The desktop reader stays split and clamps the book pane at 320px; only phone-sized viewports below 640px use the reader/graph single-pane toggle.
+- PDF chapter text is visually reflowed across soft layout line breaks while raw offsets remain unchanged for search and graph mentions.
+- Relationship detail cards label source, relationship, and target explicitly instead of using ambiguous standalone arrows.
 
 ## Problems And Fixes
 
@@ -61,6 +72,21 @@ This file is a living index for future agents working in this repo. Update it wh
 - Problem: EPUBs with rich internal TOCs, such as The Black Swan, could be flattened first and then mis-segmented by heading heuristics.
  Fix: EPUB upload now extracts episodes from NCX/EPUB navigation when available, using spine-ordered whole-document targets and falling back to existing segmentation otherwise.
 
+- Problem: flattened PDF text treated citations, page numbers, and referenced-book headings as the host book's chapters (for example `How to Read a Book` produced `Chapter 0`, `Chapter 88`, and cited *Origin of Species* chapters).
+ Fix: PDF chapter mode now prefers outline/layout evidence, validates ordered positive chapter runs, rejects outliers and pseudochapters, and offers physical-page mode when chapter evidence is unreliable.
+
+- Problem: shrinking the split view below a readable width caused excessive wrapping and cramped controls.
+ Fix: keep the desktop split view, clamp the reader at 320px, and reflow PDF soft line breaks into natural paragraphs; reserve full-width pane switching for phone layouts.
+
+- Problem: relationship cards rendered arrows around the relationship label, making direction and meaning unclear.
+ Fix: present every edge as explicit Source / Relationship / Target fields in canonical graph direction, with the supporting fact below.
+
+- Problem: an open relationship detail card could cover the graph-to-reader control after the toolbar wrapped on a phone-width viewport.
+ Fix: keep the graph header above detail cards so reader/graph navigation remains reachable at every supported width.
+
+- Problem: entity types such as `concept`, `Concept`, and whitespace variants appeared as separate legend entries and colors.
+ Fix: canonicalize entity-type keys case-insensitively in extraction/load and use the same key for frontend legend, color, and highlighting.
+
 - Problem: the landing page (`Home.vue`) rendered with no orange accents and unstyled (transparent) buttons because its design tokens (`--black`, `--orange`, etc.) were declared in a `:root {}` rule inside `<style scoped>`; Vue rewrites that to `:root[data-v-…]`, which never matches `<html>`, so the variables were undefined.
  Fix: declare the tokens on `.home-container` (the component root element) inside the scoped block so they resolve and cascade to all descendants, including child components. Do not use `:root` inside scoped styles for shared variables.
 
@@ -70,4 +96,5 @@ This file is a living index for future agents working in this repo. Update it wh
 - Keep fallback provider changes isolated to the LLM/extraction layer; frontend retry should stay provider-agnostic.
 - Add backend tests for extraction fallback behavior without hitting real networks.
 - Run `cd frontend && npm test` and `cd frontend && npm run build` after reader or graph UI changes.
+- Run `cd frontend && BOOKMIRO_ACADEMIC_PDF=/path/to/paper.pdf npm run test:e2e` for the PDF page-reading browser acceptance loop.
 - Run `backend/.venv/bin/pytest backend/tests` after extraction, API, or backend config changes.

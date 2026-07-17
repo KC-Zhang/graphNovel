@@ -51,7 +51,10 @@ test('searchGraphData matches node aliases and descriptions', () => {
 })
 
 test('searchGraphData matches edge labels, facts, and endpoint names', () => {
-  assert.equal(searchGraphData(graphData, 'trusts')[0].kind, 'edge')
+  const relationship = searchGraphData(graphData, 'trusts')[0]
+  assert.equal(relationship.kind, 'edge')
+  assert.equal(relationship.title, 'Alice — trusts — Bob')
+  assert.equal(relationship.title.includes('->'), false)
   assert.equal(searchGraphData(graphData, 'old map')[0].id, 'n1')
   assert.equal(searchGraphData(graphData, 'alice trusts bob')[0].id, 'e1')
 })

@@ -1,5 +1,7 @@
 import zipfile
 
+import fitz
+
 from app.config import Config
 from app.utils.file_parser import FileParser
 
@@ -161,3 +163,41 @@ def test_extract_epub_episodes_uses_ncx_chapter_targets(tmp_path):
     ]
     assert all("Nested Section" != ep["title"] for ep in episodes)
     assert all("Contents" != ep["title"] for ep in episodes)
+
+
+def _write_pdf_with_text_image_and_outline(path):
+    document = fitz.open()
+    first = document.new_page()
+    first.insert_text((72, 72), "Chapter 1", fontsize=20)
+    first.insert_text((72, 110), "The first physical page has searchable text.", fontsize=11)
+
+    image_page = document.new_page()
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
+    pixmap.clear_with(0x336699)
+    image_page.insert_image(fitz.Rect(72, 72, 144, 144), pixmap=pixmap)
+
+    third = document.new_page()
+    third.insert_text((72, 72), "Chapter 2", fontsize=20)
+    third.insert_text((72, 110), "The final page completes the sample.", fontsize=11)
+    document.set_toc([[1, "Chapter 1", 1], [1, "Chapter 2", 3]])
+    document.save(path)
+    document.close()
+
+
+def test_extract_pdf_document_preserves_every_physical_page_and_layout_metadata(tmp_path):
+    pdf_path = tmp_path / "page_aware.pdf"
+    _write_pdf_with_text_image_and_outline(pdf_path)
+
+    document = FileParser.extract_pdf_document(str(pdf_path))
+
+    assert document["page_count"] == 3
+    assert len(document["pages"]) == 3
+    assert "Chapter 1" in document["pages"][0]["text"]
+    assert document["pages"][1]["text"].strip() == ""
+    assert document["pages"][1]["image_count"] == 1
+    assert document["pages"][0]["width"] > 0
+    assert document["pages"][0]["headings"][0]["font_size"] >= 20
+    assert document["outline"] == [
+        {"level": 1, "title": "Chapter 1", "page_number": 1},
+        {"level": 1, "title": "Chapter 2", "page_number": 3},
+    ]

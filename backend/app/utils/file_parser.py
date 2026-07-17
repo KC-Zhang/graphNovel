@@ -10,7 +10,7 @@ import re
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 
@@ -249,19 +249,113 @@ class FileParser:
     @staticmethod
     def _extract_from_pdf(file_path: str) -> str:
         """从PDF提取文本"""
+        document = FileParser.extract_pdf_document(file_path)
+        return "\n\n".join(
+            page.get("text", "")
+            for page in document["pages"]
+            if page.get("text", "").strip()
+        )
+
+    @staticmethod
+    def extract_pdf_document(file_path: str) -> Dict[str, Any]:
+        """
+        提取 PDF 的逐页文本与轻量版式元数据。
+
+        返回值保留每一张物理页（包括无文本的图片页）。图片、字体和页面
+        排版由项目目录中的原始 PDF 保留，这里的元数据用于搜索、分章和
+        构建按页 episode。
+        """
         try:
             import fitz  # PyMuPDF
         except ImportError:
             raise ImportError("需要安装PyMuPDF: pip install PyMuPDF")
-        
-        text_parts = []
+
+        pages: List[Dict[str, Any]] = []
+        font_weights: List[tuple[float, int]] = []
         with fitz.open(file_path) as doc:
-            for page in doc:
-                text = page.get_text()
-                if text.strip():
-                    text_parts.append(text)
-        
-        return "\n\n".join(text_parts)
+            for page_index, page in enumerate(doc):
+                text = page.get_text("text", sort=True)
+                page_dict = page.get_text("dict", sort=True)
+                candidate_lines: List[Dict[str, Any]] = []
+
+                for block in page_dict.get("blocks", []):
+                    if block.get("type", 0) != 0:
+                        continue
+                    for line in block.get("lines", []):
+                        spans = line.get("spans", [])
+                        line_text = "".join(str(span.get("text", "")) for span in spans).strip()
+                        if not line_text:
+                            continue
+
+                        max_size = 0.0
+                        is_bold = False
+                        for span in spans:
+                            span_text = str(span.get("text", ""))
+                            size = float(span.get("size", 0.0) or 0.0)
+                            if span_text.strip() and size > 0:
+                                font_weights.append((size, max(1, len(span_text.strip()))))
+                                max_size = max(max_size, size)
+                            font_name = str(span.get("font", "")).casefold()
+                            flags = int(span.get("flags", 0) or 0)
+                            is_bold = is_bold or "bold" in font_name or bool(flags & 16)
+
+                        bbox = line.get("bbox") or (0, 0, 0, 0)
+                        y_ratio = float(bbox[1]) / float(page.rect.height or 1)
+                        # 只保存页面上半部的短行候选，避免把整页正文复制到元数据中。
+                        if y_ratio <= 0.55 and len(line_text) <= 160 and len(candidate_lines) < 50:
+                            candidate_lines.append({
+                                "text": line_text,
+                                "y_ratio": round(y_ratio, 4),
+                                "font_size": round(max_size, 2),
+                                "bold": is_bold,
+                            })
+
+                try:
+                    page_label = page.get_label() or str(page_index + 1)
+                except Exception:
+                    page_label = str(page_index + 1)
+
+                pages.append({
+                    "page_number": page_index + 1,
+                    "page_label": page_label,
+                    "text": text,
+                    "width": round(float(page.rect.width), 2),
+                    "height": round(float(page.rect.height), 2),
+                    "rotation": int(page.rotation),
+                    "image_count": len(page.get_images(full=True)),
+                    "headings": candidate_lines,
+                })
+
+            outline = []
+            for entry in doc.get_toc(simple=True):
+                if len(entry) < 3:
+                    continue
+                level, title, page_number = entry[:3]
+                if not title or not isinstance(page_number, int) or page_number < 1:
+                    continue
+                outline.append({
+                    "level": int(level),
+                    "title": re.sub(r'\s+', ' ', str(title)).strip(),
+                    "page_number": min(int(page_number), len(pages)),
+                })
+
+        body_font_size = 0.0
+        if font_weights:
+            total_weight = sum(weight for _, weight in font_weights)
+            midpoint = total_weight / 2
+            running = 0
+            for size, weight in sorted(font_weights, key=lambda item: item[0]):
+                running += weight
+                if running >= midpoint:
+                    body_font_size = size
+                    break
+
+        return {
+            "page_count": len(pages),
+            "body_font_size": round(body_font_size, 2),
+            "pages": pages,
+            "outline": outline,
+        }
 
     @staticmethod
     def _extract_from_epub(file_path: str) -> str:

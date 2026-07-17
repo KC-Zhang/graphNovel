@@ -103,6 +103,8 @@ class GraphExtractor:
         self._alias_index: Dict[str, str] = {}
         # 边去重: (source_id, target_id, label) -> edge dict
         self._edges: Dict[str, Dict[str, Any]] = {}
+        # 实体类型规范键 -> 首次出现的展示标签
+        self._type_labels: Dict[str, str] = {}
         self._node_counter = 0
         self._edge_counter = 0
 
@@ -111,6 +113,28 @@ class GraphExtractor:
     @staticmethod
     def _normalize(name: str) -> str:
         return re.sub(r'\s+', '', (name or '').strip().lower())
+
+    @staticmethod
+    def _normalize_type_label(node_type: Optional[str]) -> str:
+        """清理类型标签中的偶然空白，但保留首次出现的大小写。"""
+        if not isinstance(node_type, str):
+            return ""
+        return re.sub(r'\s+', ' ', node_type.strip())
+
+    @classmethod
+    def _normalize_type_key(cls, node_type: Optional[str]) -> str:
+        """生成跨语言、大小写不敏感的实体类型键。"""
+        return cls._normalize_type_label(node_type).casefold()
+
+    def _canonicalize_type(self, node_type: Optional[str]) -> str:
+        """返回同一规范键首次出现时的展示标签。"""
+        label = self._normalize_type_label(node_type)
+        if not label:
+            return ""
+        key = self._normalize_type_key(label)
+        if key not in self._type_labels:
+            self._type_labels[key] = label
+        return self._type_labels[key]
 
     def _resolve_node_id(self, name: str) -> Optional[str]:
         key = self._normalize(name)
@@ -130,6 +154,7 @@ class GraphExtractor:
         name = (name or "").strip()
         if not name:
             return None
+        canonical_type = self._canonicalize_type(node_type)
 
         node_id = self._resolve_node_id(name)
         if node_id is None:
@@ -146,8 +171,8 @@ class GraphExtractor:
                 self._register_alias(alias, node_id)
                 if alias != node["name"] and alias not in node["aliases"]:
                     node["aliases"].append(alias)
-            if node_type and not node.get("type"):
-                node["type"] = node_type
+            if canonical_type and not node.get("type"):
+                node["type"] = canonical_type
             if description and len(description) > len(node.get("description", "")):
                 node["description"] = description
             self._add_mention(node, episode_index, quote)
@@ -159,7 +184,7 @@ class GraphExtractor:
         node = {
             "id": node_id,
             "name": name,
-            "type": node_type or "",
+            "type": canonical_type,
             "aliases": [a for a in (aliases or []) if a and a != name],
             "description": description or "",
             "first_episode": episode_index,
@@ -382,6 +407,7 @@ class GraphExtractor:
             node.setdefault("mentions", [])
             node.setdefault("description", "")
             node.setdefault("type", "")
+            node["type"] = self._canonicalize_type(node.get("type"))
             node_id = node["id"]
             self._nodes[node_id] = node
             self._register_alias(node.get("name", ""), node_id)
