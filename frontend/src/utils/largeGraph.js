@@ -10,6 +10,21 @@ export const shouldUseLargeGraphRenderer = ({
   Number(nodeCount) >= nodeThreshold || Number(edgeCount) >= edgeThreshold
 )
 
+// Mirrors graphology-layout-forceatlas2's small inferSettings helper without
+// loading the synchronous layout implementation on the graph's critical path.
+// The actual layout still runs through the package's Web Worker supervisor.
+export const inferLargeGraphLayoutSettings = (graphOrOrder) => {
+  const rawOrder = typeof graphOrOrder === 'number' ? graphOrOrder : graphOrOrder?.order
+  const order = Math.max(0, Number(rawOrder) || 0)
+  return {
+    barnesHutOptimize: order > 2000,
+    strongGravityMode: true,
+    gravity: 0.05,
+    scalingRatio: 10,
+    slowDown: 1 + Math.log(Math.max(1, order)),
+  }
+}
+
 const finiteNumber = (value) => Number.isFinite(Number(value))
 
 export const graphNodeKey = (nodeOrId) => {

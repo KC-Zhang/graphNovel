@@ -25,6 +25,14 @@ const makeLargeGraph = () => {
 test.describe('large graph renderer', () => {
   test('uses WebGL for a huge graph without blocking core reader controls', async ({ page }) => {
     const graph = makeLargeGraph()
+    let releaseGraphResponse
+    let graphReleasedAt = 0
+    let markGraphRequested
+    let markStatusRequested
+    let graphRequestCount = 0
+    const graphResponseGate = new Promise(resolve => { releaseGraphResponse = resolve })
+    const graphRequested = new Promise(resolve => { markGraphRequested = resolve })
+    const statusRequested = new Promise(resolve => { markStatusRequested = resolve })
     const project = {
       project_id: projectId,
       name: 'Large graph acceptance fixture',
@@ -61,28 +69,36 @@ test.describe('large graph renderer', () => {
         },
       }),
     }))
-    await page.route(`**/api/graph/data/${projectId}*`, route => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        success: true,
-        data: {
-          ...graph,
-          mode: 'full',
-          revision_episode: 0,
-          node_count: graph.nodes.length,
-          edge_count: graph.edges.length,
-        },
-      }),
-    }))
-    await page.route(`**/api/graph/status/${projectId}`, route => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        success: true,
-        data: { running: false, extracted_upto: 0, failed_episodes: [], error: null },
-      }),
-    }))
+    await page.route(`**/api/graph/data/${projectId}*`, async route => {
+      graphRequestCount += 1
+      markGraphRequested()
+      await graphResponseGate
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            ...graph,
+            mode: 'full',
+            revision_episode: 0,
+            node_count: graph.nodes.length,
+            edge_count: graph.edges.length,
+          },
+        }),
+      })
+    })
+    await page.route(`**/api/graph/status/${projectId}`, route => {
+      markStatusRequested()
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { running: false, extracted_upto: 0, failed_episodes: [], error: null },
+        }),
+      })
+    })
     await page.route('**/api/graph/extract', route => route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -99,12 +115,26 @@ test.describe('large graph renderer', () => {
 
     await page.goto(`/read/${projectId}`)
 
-    await expect(page.locator('.episode-title')).toContainText('A responsive graph')
+    await graphRequested
+    try {
+      // Reader metadata, controls, and the graph loading state must be usable
+      // while a large initial graph response is still in flight.
+      await expect(page.locator('.episode-title')).toContainText('A responsive graph', { timeout: 2_000 })
+      await expect(page.locator('.graph-state')).toBeVisible()
+      await statusRequested
+      await page.waitForTimeout(50)
+      expect(graphRequestCount).toBe(1)
+    } finally {
+      graphReleasedAt = Date.now()
+      releaseGraphResponse()
+    }
+
     const largeGraph = page.locator('.large-graph-view')
     await expect(largeGraph).toBeVisible({ timeout: 30_000 })
     await expect(largeGraph).toHaveAttribute('data-node-count', '600')
     await expect(largeGraph).toHaveAttribute('data-edge-count', '1200')
     await expect(largeGraph).toHaveAttribute('data-renderer-status', 'ready', { timeout: 30_000 })
+    expect(Date.now() - graphReleasedAt).toBeLessThan(2_000)
     await expect(largeGraph.locator('canvas').first()).toBeVisible()
     await expect(page.locator('.graph-svg')).toHaveCount(0)
 

@@ -10,14 +10,14 @@ test.describe('PDF page reading', () => {
     await page.route('**/api/graph/extract', route => route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ success: true, data: { running: false, extracted_upto: -1 } }),
+      body: JSON.stringify({ success: true, data: { running: false, extracted_upto: 43 } }),
     }))
     await page.route('**/api/graph/status/**', route => route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        data: { running: false, extracted_upto: 1000, failed_episodes: [], error: null },
+        data: { running: false, extracted_upto: 43, failed_episodes: [], error: null },
       }),
     }))
     await page.route('**/api/graph/data/**', route => route.fulfill({
@@ -48,6 +48,10 @@ test.describe('PDF page reading', () => {
               { episode: 1, quote: 'Agentopia enhances LLM' },
             ],
           }],
+          mode: 'full',
+          revision_episode: 43,
+          node_count: 2,
+          edge_count: 1,
         },
       }),
     }))

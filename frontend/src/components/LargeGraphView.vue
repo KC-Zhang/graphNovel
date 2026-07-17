@@ -19,7 +19,12 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { entityTypeKey } from '../utils/entityTypes'
-import { colorWithAlpha, graphNodeKey, syncGraphologyGraph } from '../utils/largeGraph'
+import {
+  colorWithAlpha,
+  graphNodeKey,
+  inferLargeGraphLayoutSettings,
+  syncGraphologyGraph,
+} from '../utils/largeGraph'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -39,14 +44,15 @@ const props = defineProps({
   ariaLabel: { type: String, default: 'Knowledge graph' },
 })
 
-const emit = defineEmits(['select-node', 'select-edge', 'ready', 'renderer-error'])
+const emit = defineEmits([
+  'select-node', 'select-edge', 'ready', 'renderer-error', 'layout-error',
+])
 const container = ref(null)
 const status = ref('loading')
 
 let graph = null
 let renderer = null
 let ForceAtlas2Layout = null
-let inferForceAtlas2Settings = null
 let layout = null
 let layoutRunning = false
 let layoutTimer = null
@@ -55,6 +61,9 @@ let layoutRemainingMs = 0
 let resizeObserver = null
 let resizeFrame = null
 let syncFrame = null
+let layoutBootstrapFrame = null
+let layoutBootstrapTimer = null
+let layoutRuntimePromise = null
 let disposed = false
 
 const renderState = {
@@ -260,12 +269,12 @@ const pauseLayout = () => {
 const startLayout = () => {
   stopLayout({ kill: true })
   if (
-    !graph || !ForceAtlas2Layout || !inferForceAtlas2Settings ||
+    !graph || !ForceAtlas2Layout ||
     !props.layoutEnabled || graph.order < 2
   ) return
 
   try {
-    const inferred = inferForceAtlas2Settings(graph)
+    const inferred = inferLargeGraphLayoutSettings(graph)
     layout = new ForceAtlas2Layout(graph, {
       settings: { ...inferred, ...props.layoutSettings },
     })
@@ -275,6 +284,41 @@ const startLayout = () => {
     stopLayout({ kill: true })
     emit('renderer-error', error)
   }
+}
+
+const loadLayoutRuntime = async () => {
+  if (disposed || ForceAtlas2Layout) return
+  try {
+    if (!layoutRuntimePromise) {
+      layoutRuntimePromise = import('graphology-layout-forceatlas2/worker')
+    }
+    const workerModule = await layoutRuntimePromise
+    if (disposed) return
+    ForceAtlas2Layout = workerModule.default || workerModule.FA2Layout
+    if (!ForceAtlas2Layout) throw new Error('ForceAtlas2 worker runtime is unavailable')
+    if (props.layoutEnabled) startLayout()
+  } catch (error) {
+    if (!disposed) emit('layout-error', error)
+  }
+}
+
+// Let Sigma commit its deterministic-position canvas before downloading and
+// starting the layout supervisor. Worker bootstrapping used to happen in the
+// same task as renderer creation, delaying the first usable graph frame.
+const scheduleLayoutBootstrap = () => {
+  if (disposed || !props.layoutEnabled) return
+  if (ForceAtlas2Layout) {
+    startLayout()
+    return
+  }
+  if (layoutRuntimePromise || layoutBootstrapFrame !== null || layoutBootstrapTimer !== null) return
+  layoutBootstrapFrame = requestAnimationFrame(() => {
+    layoutBootstrapFrame = null
+    layoutBootstrapTimer = window.setTimeout(() => {
+      layoutBootstrapTimer = null
+      loadLayoutRuntime()
+    }, 0)
+  })
 }
 
 const runSync = () => {
@@ -364,7 +408,7 @@ watch([
 
 watch(() => props.layoutEnabled, enabled => {
   if (!graph) return
-  if (enabled) startLayout()
+  if (enabled) scheduleLayoutBootstrap()
   else stopLayout({ kill: true })
 })
 
@@ -377,19 +421,14 @@ onMounted(async () => {
   try {
     // These imports intentionally create a lazy WebGL chunk. Small graphs do
     // not pay Sigma/Graphology/ForceAtlas2 startup cost.
-    const [graphologyModule, sigmaModule, forceAtlas2Module, workerModule] = await Promise.all([
+    const [graphologyModule, sigmaModule] = await Promise.all([
       import('graphology'),
       import('sigma'),
-      import('graphology-layout-forceatlas2'),
-      import('graphology-layout-forceatlas2/worker'),
     ])
     if (disposed) return
 
     const Graph = graphologyModule.default || graphologyModule.Graph
     const Sigma = sigmaModule.default || sigmaModule.Sigma
-    ForceAtlas2Layout = workerModule.default || workerModule.FA2Layout
-    const forceAtlas2 = forceAtlas2Module.default || forceAtlas2Module
-    inferForceAtlas2Settings = forceAtlas2.inferSettings || forceAtlas2Module.inferSettings
 
     graph = new Graph({ type: 'directed', multi: true, allowSelfLoops: true })
     syncGraphologyGraph(graph, {
@@ -436,8 +475,8 @@ onMounted(async () => {
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     status.value = 'ready'
-    startLayout()
     emit('ready', { graph, renderer })
+    scheduleLayoutBootstrap()
   } catch (error) {
     if (disposed) return
     status.value = 'error'
@@ -449,8 +488,12 @@ onBeforeUnmount(() => {
   disposed = true
   if (syncFrame !== null) cancelAnimationFrame(syncFrame)
   if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
+  if (layoutBootstrapFrame !== null) cancelAnimationFrame(layoutBootstrapFrame)
+  if (layoutBootstrapTimer !== null) window.clearTimeout(layoutBootstrapTimer)
   syncFrame = null
   resizeFrame = null
+  layoutBootstrapFrame = null
+  layoutBootstrapTimer = null
   resizeObserver?.disconnect()
   window.removeEventListener('resize', handleResize)
   document.removeEventListener('visibilitychange', handleVisibilityChange)

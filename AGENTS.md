@@ -15,6 +15,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - `frontend/src/components/PdfPageView.vue` - PDF.js canvas/text-layer rendering, search highlights, and graph mention overlays.
 - `frontend/src/components/GraphPanel.vue` - keyed incremental D3 graph visualization, large-graph renderer switching, graph controls, and detail panels.
 - `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL graph renderer with incremental Graphology sync and ForceAtlas2 worker layout.
+- `frontend/src/utils/extractionSchedule.js` - whole-book background extraction target policy.
 - `frontend/src/utils/graphDelta.js` - merges additive episode graph deltas into the reader's current graph snapshot.
 - `frontend/src/utils/largeGraph.js` - large-graph thresholds, stable graph keys/positions, and incremental Graphology synchronization.
 - `locales/en.json`, `locales/zh.json` - UI strings for the reader, graph panel, and operational states.
@@ -31,10 +32,11 @@ This file is a living index for future agents working in this repo. Update it wh
 - EPUB uploads can use structured NCX/EPUB navigation to build reader episodes before falling back to flattened-text segmentation.
 - PDF uploads support pre-extraction chapter/page selection; page mode preserves physical pages, images, and layout while keeping search, progress, and graph jumps.
 - Entity types are grouped with whitespace-normalized Unicode casefold keys while preserving the first-seen display spelling.
-- Reader routes and heavy PDF/graph/history components load as separate chunks; the entry bundle has an enforced 300 KiB raw-size budget.
+- The reader route stays off the landing-page entry; PDF.js, WebGL, and history remain on-demand chunks, while `GraphPanel` ships with the reader route to avoid a second graph-critical network round trip. The entry bundle has an enforced 300 KiB raw-size budget.
 - Book-body search runs on the server and returns bounded results instead of downloading every episode into the browser.
 - Graph polling transfers episode deltas after the initial snapshot, and graph rendering preserves existing positions as chapters are revealed.
 - Dense graphs automatically use a WebGL renderer and worker-based layout while smaller graphs keep the more detailed SVG renderer.
+- Reader controls and graph loading state mount after project metadata; the initial graph and current episode then load in parallel with duplicate graph requests coalesced.
 
 ## Decisions
 
@@ -55,10 +57,10 @@ This file is a living index for future agents working in this repo. Update it wh
 - The desktop reader stays split and clamps the book pane at 320px; only phone-sized viewports below 640px use the reader/graph single-pane toggle.
 - PDF chapter text is visually reflowed across soft layout line breaks while raw offsets remain unchanged for search and graph mentions.
 - Relationship detail cards label source, relationship, and target explicitly instead of using ambiguous standalone arrows.
-- The default graph scope is the current chapter. Extraction stays within the latest reached chapter plus two prefetched episodes unless the user explicitly selects the whole-book graph.
+- The default graph scope is the current chapter, but sequential extraction is scheduled through the whole book immediately. A smaller target does not make chapter zero finish sooner and leaves later scopes cold.
 - Graph delta clients send `since_episode`; the API returns `revision_episode`, total counts, and either `mode: full` or `mode: delta`. Nodes and edges persist `last_episode` so metadata-only updates are not lost.
 - Server text search is literal, capped at 300 results, and returns UTF-16 offsets compatible with browser text selections.
-- Graphs switch from D3/SVG to lazy Sigma/WebGL at 500 visible nodes or 1,000 visible edges. ForceAtlas2 runs in a worker and stops after a bounded layout window.
+- Graphs switch from D3/SVG to lazy Sigma/WebGL at 500 visible nodes or 1,000 visible edges. Sigma paints deterministic positions first; ForceAtlas2 then loads and runs in a worker for a bounded layout window.
 - `npm run test:bundle` resolves the real entry script from built `index.html` and enforces a 300 KiB raw entry limit.
 
 ## Problems And Fixes
@@ -117,6 +119,12 @@ This file is a living index for future agents working in this repo. Update it wh
 - Problem: every search downloaded/scanned all chapters in the browser and every extraction update downloaded the full graph again.
  Fix: use bounded server search, a 20-episode text LRU, and revisioned graph delta responses.
 
+- Problem: the performance release made graph loading feel slower by waiting for the initial full graph before mounting the reader, deferring extraction after the first three episodes, and bootstrapping layout before the first WebGL frame.
+ Fix: mount the reader immediately after metadata, fetch graph and episode concurrently, restore whole-book background extraction, paint Sigma before loading the layout worker, and keep CURRENT scope plus delta transfer to bound render work.
+
+- Problem: extraction status advances in memory just before `graph.json` and the project revision are persisted, so the reader could mark the final status as loaded while still holding the previous graph snapshot.
+ Fix: compare status against the `revision_episode` confirmed by `/graph/data`, continue polling until they match, and coalesce concurrent initial/poll graph requests.
+
 ## Maintenance Notes
 
 - Do not log API keys or copied book text.
@@ -125,4 +133,5 @@ This file is a living index for future agents working in this repo. Update it wh
 - Run `cd frontend && npm test`, `cd frontend && npm run build`, and `cd frontend && npm run test:bundle` after reader or graph UI changes.
 - Run `cd frontend && BOOKMIRO_ACADEMIC_PDF=/path/to/paper.pdf npm run test:e2e` for the PDF page-reading browser acceptance loop.
 - Keep the large-graph Playwright scenario passing; it must exercise the WebGL threshold without requiring an external fixture.
+- The large-graph acceptance test must keep the reader usable while `/graph/data` is held, issue only one initial graph request, and show the WebGL canvas within 2 seconds of releasing the mocked response.
 - Run `backend/.venv/bin/pytest backend/tests` after extraction, API, or backend config changes.

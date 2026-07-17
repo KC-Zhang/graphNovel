@@ -47,3 +47,14 @@ export const mergeGraphPayload = (current, payload) => {
     edges: mergeItems(current?.edges, payload.edges),
   }
 }
+
+/**
+ * Status can briefly advance before graph.json and the project revision finish
+ * persisting. Compare against the revision confirmed by /graph/data instead of
+ * assuming that a status observation means the corresponding graph was loaded.
+ */
+export const graphNeedsRefresh = ({
+  extractedUpto = -1,
+  graphRevision = -1,
+  failedChanged = false,
+} = {}) => failedChanged || extractedUpto > graphRevision

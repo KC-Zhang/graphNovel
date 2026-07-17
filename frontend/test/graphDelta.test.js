@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mergeGraphPayload } from '../src/utils/graphDelta.js'
+import { graphNeedsRefresh, mergeGraphPayload } from '../src/utils/graphDelta.js'
 
 test('merges graph deltas without losing earlier mentions', () => {
   const current = {
@@ -28,4 +28,10 @@ test('full graph payload replaces previous graph', () => {
   )
   assert.deepEqual(merged.nodes.map(node => node.id), ['new'])
   assert.deepEqual(merged.edges, [])
+})
+
+test('graph refresh follows the persisted graph revision, not status observation', () => {
+  assert.equal(graphNeedsRefresh({ extractedUpto: 2, graphRevision: 1 }), true)
+  assert.equal(graphNeedsRefresh({ extractedUpto: 2, graphRevision: 2 }), false)
+  assert.equal(graphNeedsRefresh({ extractedUpto: 2, graphRevision: 2, failedChanged: true }), true)
 })

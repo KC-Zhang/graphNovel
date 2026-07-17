@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   colorWithAlpha,
+  inferLargeGraphLayoutSettings,
   shouldUseLargeGraphRenderer,
   syncGraphologyGraph,
 } from '../src/utils/largeGraph.js'
@@ -56,6 +57,17 @@ test('large graph threshold can be selected by either nodes or edges', () => {
   assert.equal(shouldUseLargeGraphRenderer({ nodeCount: 499, edgeCount: 999 }), false)
   assert.equal(shouldUseLargeGraphRenderer({ nodeCount: 500, edgeCount: 10 }), true)
   assert.equal(shouldUseLargeGraphRenderer({ nodeCount: 20, edgeCount: 1000 }), true)
+})
+
+test('large graph layout settings are inferred without the synchronous layout bundle', () => {
+  assert.deepEqual(inferLargeGraphLayoutSettings({ order: 100 }), {
+    barnesHutOptimize: false,
+    strongGravityMode: true,
+    gravity: 0.05,
+    scalingRatio: 10,
+    slowDown: 1 + Math.log(100),
+  })
+  assert.equal(inferLargeGraphLayoutSettings(2001).barnesHutOptimize, true)
 })
 
 test('incremental sync preserves positions and places a new neighbour nearby', () => {

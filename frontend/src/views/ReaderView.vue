@@ -325,6 +325,7 @@ import { useI18n } from 'vue-i18n'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 import { faArrowLeft } from '@fortawesome/free-solid-svg-icons'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
+import GraphPanel from '../components/GraphPanel.vue'
 import {
   uploadBook, ensureExtraction, getExtractStatus, getGraphData, getEpisode, getBook,
   getPdfSourceUrl, searchBook, setReadingMode
@@ -341,7 +342,8 @@ import {
   scopeEpisodeLimit,
 } from '../utils/readerLinks'
 import { visibleInterval, isRangeCovered } from '../utils/readProgress'
-import { mergeGraphPayload } from '../utils/graphDelta'
+import { graphNeedsRefresh, mergeGraphPayload } from '../utils/graphDelta'
+import { fullBookExtractionTarget } from '../utils/extractionSchedule'
 import { readerTextBlocks } from '../utils/readerText'
 import { clampRevealMax, latestReadableEpisode } from '../utils/revealProgress'
 import {
@@ -350,12 +352,10 @@ import {
   searchGraphData,
 } from '../utils/readerSearch'
 
-const GraphPanel = defineAsyncComponent(() => import('../components/GraphPanel.vue'))
 const PdfPageView = defineAsyncComponent(() => import('../components/PdfPageView.vue'))
 
 const SEARCH_DEBOUNCE_MS = 220
 const MAX_SEARCH_RESULTS = 300
-const EXTRACTION_PREFETCH_EPISODES = 2
 const EPISODE_TEXT_CACHE_LIMIT = 20
 
 const props = defineProps({ projectId: String })
@@ -582,6 +582,7 @@ const extractedUpto = ref(-1)
 const extractRunning = ref(false)
 const extractError = ref('')
 const extractRetrying = ref(false)
+const initialGraphLoading = ref(false)
 const graphScope = ref(GRAPH_SCOPES.CURRENT)
 const graphScopeLimit = computed(() => scopeEpisodeLimit({
   scope: graphScope.value,
@@ -593,16 +594,13 @@ const setGraphScope = (scope) => {
   if (graphScope.value === GRAPH_SCOPES.ALL) ensureAhead()
 }
 // 当前图谱范围还没抽到时，显示"构建中"
-const graphLoading = computed(() => graphScopeLimit.value > extractedUpto.value)
-// Keep LLM extraction near the reading position so a new upload does not
-// compete with the reader for server, network, and graph-rendering resources.
-const desiredExtractUpto = computed(() => {
-  const total = episodes.value.length
-  if (!total) return -1
-  if (graphScope.value === GRAPH_SCOPES.ALL) return total - 1
-  const reached = Math.max(viewEpisode.value, latestReadEpisode.value, revealMax.value)
-  return Math.min(total - 1, reached + EXTRACTION_PREFETCH_EPISODES)
-})
+const graphLoading = computed(() =>
+  initialGraphLoading.value || graphScopeLimit.value > extractedUpto.value
+)
+// Extraction is sequential server-side. Request the whole book immediately so
+// later chapters and the all-book scope stay warm; CURRENT still limits what is
+// displayed and graph/data still transfers incremental revisions.
+const desiredExtractUpto = computed(() => fullBookExtractionTarget(episodes.value.length))
 const extractProgress = computed(() => {
   const total = episodes.value.length
   return {
@@ -781,8 +779,7 @@ const confirmChapterReview = async () => {
   }
   phase.value = 'ready'
   await setViewEpisode(0)
-  // Prime a small extraction window without making the reader compete with
-  // a full-book background job.
+  // Start sequential whole-book extraction in the background.
   ensureAhead()
 }
 
@@ -1167,8 +1164,10 @@ const onJump = async ({ episode, quote }) => {
 
 // ---------- 图谱加载 ----------
 let lastGraphEpisode = -1
+let activeGraphLoad = null
+let queuedForceFullGraphLoad = null
 
-const loadGraph = async ({ forceFull = false } = {}) => {
+const performGraphLoad = async (forceFull) => {
   try {
     const canUseDelta = !forceFull && lastGraphEpisode >= 0 && graphData.value.nodes.length > 0
     const res = await getGraphData(projectId.value, {
@@ -1188,10 +1187,39 @@ const loadGraph = async ({ forceFull = false } = {}) => {
   }
 }
 
+const loadGraph = ({ forceFull = false } = {}) => {
+  // Initial reader setup and extraction polling can observe the same revision
+  // at nearly the same time. Reuse the in-flight request instead of downloading
+  // and reconciling the same full graph twice.
+  if (activeGraphLoad) {
+    if (!forceFull || activeGraphLoad.forceFull) return activeGraphLoad.promise
+
+    // A forced repair refresh cannot be weakened to the active delta request.
+    // Queue exactly one full follow-up; concurrent retry/status callers share it.
+    if (!queuedForceFullGraphLoad) {
+      let followup
+      followup = activeGraphLoad.promise
+        .then(() => loadGraph({ forceFull: true }))
+        .finally(() => {
+          if (queuedForceFullGraphLoad === followup) queuedForceFullGraphLoad = null
+        })
+      queuedForceFullGraphLoad = followup
+    }
+    return queuedForceFullGraphLoad
+  }
+
+  const rawRequest = performGraphLoad(forceFull)
+  let request
+  request = rawRequest.finally(() => {
+    if (activeGraphLoad?.promise === request) activeGraphLoad = null
+  })
+  activeGraphLoad = { promise: request, forceFull }
+  return request
+}
+
 // ---------- 按需增量抽取 + 轮询 ----------
 let pollTimer = null
 let polling = false
-let lastLoadedUpto = -1
 // 上一次已知的失败章节签名：失败章节被重试成功后（extracted_upto 不变但图谱新增节点），
 // 据此触发图谱重新加载。
 let lastFailedKey = ''
@@ -1213,11 +1241,20 @@ const pollStatus = async () => {
       const failedKey = (s.failed_episodes || []).join(',')
       const failedChanged = failedKey !== lastFailedKey
       lastFailedKey = failedKey
-      if (s.extracted_upto > lastLoadedUpto || failedChanged) {
-        lastLoadedUpto = Math.max(lastLoadedUpto, s.extracted_upto)
+      if (graphNeedsRefresh({
+        extractedUpto: s.extracted_upto,
+        graphRevision: lastGraphEpisode,
+        failedChanged,
+      })) {
         await loadGraph({ forceFull: failedChanged })
       }
-      if (s.running || revealMax.value > s.extracted_upto) {
+      // Extraction status can advance just before graph.json and the project
+      // revision finish persisting. Keep polling until /graph/data confirms the
+      // same revision, including the final chapter in a run.
+      if (s.running || graphNeedsRefresh({
+        extractedUpto: s.extracted_upto,
+        graphRevision: lastGraphEpisode,
+      })) {
         pollTimer = setTimeout(pollStatus, 1500)
         return
       }
@@ -1235,7 +1272,7 @@ const startPolling = () => {
   pollStatus()
 }
 
-// 确保抽取推进到"当前阅读位置 + 预取"的章节
+// Ensure sequential background extraction is scheduled through the whole book.
 const ensureAhead = async ({ suppressRunningError = false, surfaceRequestError = false } = {}) => {
   if (!projectId.value || projectId.value === 'new' || !episodes.value.length) return
   const target = desiredExtractUpto.value
@@ -1290,6 +1327,7 @@ const inferSourceFormat = (files = []) => {
 const initExisting = async () => {
   phase.value = 'loading'
   statusMessage.value = t('reader.loading')
+  initialGraphLoading.value = false
   try {
     lastGraphEpisode = -1
     const res = await getBook(projectId.value)
@@ -1315,17 +1353,24 @@ const initExisting = async () => {
     loadProgress(projectId.value)  // 恢复已读进度与阅读位置
     syncLatestReachedFromProgress()
     extractedUpto.value = typeof res.data.extracted_upto === 'number' ? res.data.extracted_upto : -1
-    lastLoadedUpto = extractedUpto.value
 
-    // 已抽取的部分立即加载
-    if (extractedUpto.value >= 0) await loadGraph()
-
-    // 立即进入阅读；回到上次阅读位置
+    // The graph panel is part of the reader's critical UI. Mount it as soon as
+    // book metadata is ready, then fetch the graph and current episode in
+    // parallel. Previously the panel (and its WebGL runtime) could not even
+    // begin loading until the full graph request had completed.
     phase.value = 'ready'
-    if (episodes.value.length) await setViewEpisode(viewEpisode.value || 0)
-    // Resume extraction only around the restored reading position.
+    initialGraphLoading.value = extractedUpto.value >= 0
+    const initialGraphRequest = extractedUpto.value >= 0
+      ? loadGraph().finally(() => { initialGraphLoading.value = false })
+      : Promise.resolve()
+    const initialEpisodeRequest = episodes.value.length
+      ? setViewEpisode(viewEpisode.value || 0)
+      : Promise.resolve()
+    await Promise.all([initialGraphRequest, initialEpisodeRequest])
+    // Resume whole-book background extraction from persisted progress.
     ensureAhead()
   } catch (e) {
+    initialGraphLoading.value = false
     errorText.value = e.message || 'Failed to load book'
     phase.value = 'error'
   }
@@ -1366,7 +1411,6 @@ const initNew = async () => {
     loadProgress(projectId.value)  // 新书：初始化空进度并绑定 projectId
     syncLatestReachedFromProgress()
     extractedUpto.value = -1
-    lastLoadedUpto = -1
     lastGraphEpisode = -1
     // 更新 URL 以便刷新/分享
     router.replace({ name: 'Reader', params: { projectId: projectId.value } })
