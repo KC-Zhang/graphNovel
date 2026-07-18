@@ -133,7 +133,7 @@ test.describe('all-chapters large graph performance', () => {
     await page.addInitScript(({ heartbeatInterval }) => {
       const now = performance.now()
       window.__bookMiroHeartbeat = { last: now, startedAt: now, samples: [] }
-      window.__bookMiroCanvasLabels = { nodes: [], edges: [] }
+      window.__bookMiroCanvasLabels = { nodes: [], edges: [], hovers: [] }
       window.setInterval(() => {
         const heartbeat = window.__bookMiroHeartbeat
         const current = performance.now()
@@ -151,7 +151,11 @@ test.describe('all-chapters large graph performance', () => {
             className.includes('sigma-edgeLabels') ||
             className.includes('large-graph-edge-label-overlay')
           ) window.__bookMiroCanvasLabels.edges = []
-          else if (className.includes('sigma-labels')) window.__bookMiroCanvasLabels.nodes = []
+          else if (
+            className.includes('sigma-labels') ||
+            className.includes('large-graph-node-label-overlay')
+          ) window.__bookMiroCanvasLabels.nodes = []
+          else if (className.includes('sigma-hovers')) window.__bookMiroCanvasLabels.hovers = []
           return originalClearRect.apply(this, args)
         }
         contextPrototype.fillText = function (value, ...args) {
@@ -161,8 +165,13 @@ test.describe('all-chapters large graph performance', () => {
             className.includes('large-graph-edge-label-overlay')
           ) {
             window.__bookMiroCanvasLabels.edges.push(String(value))
-          } else if (className.includes('sigma-labels')) {
+          } else if (
+            className.includes('sigma-labels') ||
+            className.includes('large-graph-node-label-overlay')
+          ) {
             window.__bookMiroCanvasLabels.nodes.push(String(value))
+          } else if (className.includes('sigma-hovers')) {
+            window.__bookMiroCanvasLabels.hovers.push(String(value))
           }
           return originalFillText.call(this, value, ...args)
         }
@@ -312,11 +321,17 @@ test.describe('all-chapters large graph performance', () => {
     expect(graphRequestCount).toBe(1)
     const rendererReadyMs = Date.now() - switchStartedAt
 
-    await expect.poll(() => readLabelCount(largeGraph, 'data-node-label-count')).toBeGreaterThanOrEqual(1)
+    await expect.poll(() => readLabelCount(largeGraph, 'data-node-label-count')).toBe(ALL_NODE_COUNT)
+    await expect(largeGraph).toHaveAttribute('data-node-label-status', 'ready')
     const initialNodeLabelCount = await readLabelCount(largeGraph, 'data-node-label-count')
     const initialEdgeLabelCount = await readLabelCount(largeGraph, 'data-edge-label-count')
-    expect(initialNodeLabelCount).toBeLessThanOrEqual(60)
+    const labelsReadyMs = Date.now() - switchStartedAt
+    expect(initialNodeLabelCount).toBe(ALL_NODE_COUNT)
     expect(initialEdgeLabelCount).toBe(0)
+    expect(labelsReadyMs).toBeLessThan(3_000)
+    const paintedNodeLabels = await page.evaluate(() => window.__bookMiroCanvasLabels.nodes)
+    expect(paintedNodeLabels).toHaveLength(ALL_NODE_COUNT)
+    expect(new Set(paintedNodeLabels).size).toBe(ALL_NODE_COUNT)
 
     // Give the heartbeat one turn after the ready mutation so the final graph
     // synchronization stall is included in the sample.
@@ -326,6 +341,7 @@ test.describe('all-chapters large graph performance', () => {
       searchFillMs,
       searchResultMs,
       rendererReadyMs,
+      labelsReadyMs,
       switchHeartbeat,
     })
     expect(searchResultMs).toBeLessThan(2_000)
@@ -399,6 +415,19 @@ test.describe('all-chapters large graph performance', () => {
     await expect(page.locator('.detail-panel')).toHaveCount(0)
     await expect.poll(() => readLabelCount(largeGraph, 'data-edge-label-count')).toBe(0)
 
+    // Selecting a node must not make Sigma paint a duplicate hover label over
+    // the complete progressive label layer.
+    await searchInput.fill(SEMANTIC_SOURCE_NAME)
+    const semanticNodeResult = page.locator('.search-result.node').filter({ hasText: SEMANTIC_SOURCE_NAME }).first()
+    await expect(semanticNodeResult).toBeVisible({ timeout: 3_000 })
+    await semanticNodeResult.click()
+    await expect(page.locator('.detail-panel .node-name')).toHaveText(SEMANTIC_SOURCE_NAME)
+    await page.waitForTimeout(50)
+    await expect(largeGraph).toHaveAttribute('data-node-label-status', 'ready')
+    expect(await page.evaluate(() => window.__bookMiroCanvasLabels.hovers)).toEqual([])
+    await page.locator('.detail-panel .detail-close').click()
+    await expect(page.locator('.detail-panel')).toHaveCount(0)
+
     console.log('all-chapters label metrics', {
       initialNodeLabelCount,
       initialEdgeLabelCount,
@@ -450,6 +479,8 @@ test.describe('all-chapters large graph performance', () => {
     await expect(largeGraph).toHaveAttribute('data-renderer-status', 'ready')
 
     await page.waitForTimeout(250)
+    await expect(largeGraph).toHaveAttribute('data-node-label-status', 'ready')
+    await expect.poll(() => readLabelCount(largeGraph, 'data-node-label-count')).toBeGreaterThan(0)
     const interactionHeartbeat = await readHeartbeat(page)
     console.log('all-chapters interaction metrics', {
       toolbarMs,

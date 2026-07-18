@@ -8,10 +8,16 @@
     :data-renderer-status="status"
     :data-node-count="nodes.length"
     :data-edge-count="edges.length"
+    :data-node-label-status="nodeLabelStatus"
     :data-node-label-count="renderedNodeLabelCount"
     :data-edge-label-count="renderedEdgeLabelCount"
     :data-layout-mode="graphLayoutMode"
   >
+    <canvas
+      ref="nodeLabelCanvas"
+      class="large-graph-node-label-overlay"
+      aria-hidden="true"
+    ></canvas>
     <canvas
       ref="edgeLabelCanvas"
       class="large-graph-edge-label-overlay"
@@ -63,8 +69,10 @@ const emit = defineEmits([
   'select-node', 'select-edge', 'ready', 'renderer-error', 'layout-error',
 ])
 const container = ref(null)
+const nodeLabelCanvas = ref(null)
 const edgeLabelCanvas = ref(null)
 const status = ref('loading')
+const nodeLabelStatus = ref('loading')
 const renderedNodeLabelCount = ref(0)
 const renderedEdgeLabelCount = ref(0)
 const massiveGraph = computed(() => shouldUseMassiveGraphProfile({
@@ -114,6 +122,12 @@ let typeColorSource = null
 let typeColorLookup = new Map()
 let edgeLabelCandidateSource = null
 let edgeLabelCandidates = new Set()
+let nodeLabelKeysSource = null
+let nodeLabelKeys = []
+let nodeLabelContext = null
+let nodeLabelTimer = null
+let nodeLabelFrame = null
+let nodeLabelGeneration = 0
 let edgeLabelContext = null
 
 const asKey = value => graphNodeKey(value)
@@ -322,6 +336,127 @@ const rectanglesOverlap = (left, right, padding = 4) => !(
   right.bottom + padding < left.top
 )
 
+const prepareOverlayCanvas = (canvas, cachedContext) => {
+  if (!canvas) return null
+  const width = Math.max(1, container.value?.clientWidth || 1)
+  const height = Math.max(1, container.value?.clientHeight || 1)
+  const pixelRatio = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1))
+  const physicalWidth = Math.round(width * pixelRatio)
+  const physicalHeight = Math.round(height * pixelRatio)
+  let context = cachedContext
+  if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
+    canvas.width = physicalWidth
+    canvas.height = physicalHeight
+    canvas.style.width = `${width}px`
+    canvas.style.height = `${height}px`
+    context = canvas.getContext('2d')
+  } else if (!context) {
+    context = canvas.getContext('2d')
+  }
+  if (!context) return null
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+  return { context, width, height }
+}
+
+const clearMassiveNodeLabelWork = ({ clear = false } = {}) => {
+  nodeLabelGeneration += 1
+  if (nodeLabelTimer !== null) window.clearTimeout(nodeLabelTimer)
+  if (nodeLabelFrame !== null) cancelAnimationFrame(nodeLabelFrame)
+  nodeLabelTimer = null
+  nodeLabelFrame = null
+  if (clear) {
+    const layer = prepareOverlayCanvas(nodeLabelCanvas.value, nodeLabelContext)
+    if (layer) {
+      nodeLabelContext = layer.context
+      layer.context.clearRect(0, 0, layer.width, layer.height)
+    }
+    renderedNodeLabelCount.value = 0
+    nodeLabelStatus.value = 'loading'
+  }
+}
+
+const currentNodeLabelKeys = () => {
+  if (nodeLabelKeysSource !== props.nodes) {
+    nodeLabelKeys = graph?.nodes?.() || []
+    nodeLabelKeysSource = props.nodes
+  }
+  return nodeLabelKeys
+}
+
+const paintMassiveNodeLabelChunk = ({ generation, index, displayed, layer }) => {
+  if (
+    disposed || generation !== nodeLabelGeneration ||
+    !massiveGraph.value || !renderer || !graph
+  ) return
+
+  const keys = currentNodeLabelKeys()
+  const context = layer.context
+  const startedAt = performance.now()
+  let processed = 0
+  const cameraRatio = Math.max(0.04, renderer.getCamera().getState().ratio || 1)
+  const denseOverview = keys.length >= 2000
+  const baseFontSize = denseOverview ? 8 : 10
+  const fontSize = Math.min(13, Math.max(baseFontSize, baseFontSize / Math.sqrt(cameraRatio)))
+  const baseOpacity = denseOverview ? Math.min(1, 0.68 / Math.sqrt(cameraRatio)) : 1
+  const fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  const normalFont = `500 ${fontSize.toFixed(1)}px ${fontFamily}`
+  context.font = normalFont
+  context.textAlign = 'left'
+  context.textBaseline = 'middle'
+
+  while (index < keys.length && processed < 320 && performance.now() - startedAt < 6) {
+    const key = keys[index]
+    index += 1
+    processed += 1
+    if (!graph.hasNode(key)) continue
+    const point = renderer.graphToViewport(graph.getNodeAttributes(key))
+    if (point.x < 0 || point.x > layer.width || point.y < 0 || point.y > layer.height) continue
+    const label = String(graph.getNodeAttribute(key, 'label') || '').trim()
+    if (!label) continue
+
+    const selected = key === renderState.selectedNode
+    const outsideFocus = renderState.hasExplicitFocus &&
+      !renderState.focusedNodes.has(key) && !renderState.accentNodes.has(key)
+    const readAndFiltered = props.focusUnread &&
+      renderState.seenNodes.has(key) && !renderState.accentNodes.has(key)
+    context.globalAlpha = outsideFocus || readAndFiltered ? baseOpacity * 0.18 : baseOpacity
+    context.fillStyle = selected ? '#C5283D' : '#333333'
+    if (selected) context.font = `700 ${(fontSize + 1).toFixed(1)}px ${fontFamily}`
+    context.fillText(label, point.x + 7, point.y)
+    if (selected) context.font = normalFont
+    displayed += 1
+  }
+  context.globalAlpha = 1
+  renderedNodeLabelCount.value = displayed
+
+  if (index < keys.length) {
+    nodeLabelFrame = requestAnimationFrame(() => {
+      nodeLabelFrame = null
+      paintMassiveNodeLabelChunk({ generation, index, displayed, layer })
+    })
+  } else {
+    nodeLabelStatus.value = 'ready'
+  }
+}
+
+const scheduleMassiveNodeLabels = () => {
+  if (!massiveGraph.value || !renderer || !graph) return
+  clearMassiveNodeLabelWork({ clear: true })
+  const generation = nodeLabelGeneration
+  // Repeated camera/layout frames keep cancelling this short timer. Labels
+  // therefore stay hidden while moving, then the complete set is painted in
+  // cooperative chunks as soon as the graph settles.
+  nodeLabelTimer = window.setTimeout(() => {
+    nodeLabelTimer = null
+    if (disposed || generation !== nodeLabelGeneration) return
+    const layer = prepareOverlayCanvas(nodeLabelCanvas.value, nodeLabelContext)
+    if (!layer) return
+    nodeLabelContext = layer.context
+    layer.context.clearRect(0, 0, layer.width, layer.height)
+    paintMassiveNodeLabelChunk({ generation, index: 0, displayed: 0, layer })
+  }, 48)
+}
+
 const drawMassiveEdgeLabels = () => {
   const canvas = edgeLabelCanvas.value
   if (!canvas || !renderer || !graph || !massiveGraph.value) {
@@ -329,26 +464,13 @@ const drawMassiveEdgeLabels = () => {
     return
   }
 
-  const width = Math.max(1, container.value?.clientWidth || 1)
-  const height = Math.max(1, container.value?.clientHeight || 1)
-  const pixelRatio = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1))
-  const physicalWidth = Math.round(width * pixelRatio)
-  const physicalHeight = Math.round(height * pixelRatio)
-  if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
-    canvas.width = physicalWidth
-    canvas.height = physicalHeight
-    canvas.style.width = `${width}px`
-    canvas.style.height = `${height}px`
-    edgeLabelContext = canvas.getContext('2d')
-  }
-
-  const context = edgeLabelContext || canvas.getContext('2d')
-  if (!context) {
+  const layer = prepareOverlayCanvas(canvas, edgeLabelContext)
+  if (!layer) {
     renderedEdgeLabelCount.value = 0
     return
   }
+  const { context, width, height } = layer
   edgeLabelContext = context
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
   context.clearRect(0, 0, width, height)
 
   const selectedEdge = renderState.selectedEdge
@@ -409,9 +531,14 @@ const drawMassiveEdgeLabels = () => {
 
 const updateRenderedLabelCounts = () => {
   if (!renderer) return
-  renderedNodeLabelCount.value = renderer.getNodeDisplayedLabels().size
-  if (massiveGraph.value) drawMassiveEdgeLabels()
-  else renderedEdgeLabelCount.value = renderer.getEdgeDisplayedLabels().size
+  if (massiveGraph.value) {
+    scheduleMassiveNodeLabels()
+    drawMassiveEdgeLabels()
+  } else {
+    renderedNodeLabelCount.value = renderer.getNodeDisplayedLabels().size
+    renderedEdgeLabelCount.value = renderer.getEdgeDisplayedLabels().size
+    nodeLabelStatus.value = 'ready'
+  }
 }
 
 const yieldMainThread = () => {
@@ -601,6 +728,11 @@ const scheduleLayoutBootstrap = () => {
   })
 }
 
+// Node names are already present in the all-node overlay. Sigma's default
+// hover painter would draw the same label a second time in a white callout;
+// the WebGL hover-node program still provides the visual node highlight.
+const drawMassiveNodeHover = () => {}
+
 const runSync = () => {
   if (!graph) return null
   styleRefreshToken += 1
@@ -613,6 +745,7 @@ const runSync = () => {
     edgeAttributes,
   })
   edgeLabelCandidateSource = null
+  nodeLabelKeysSource = null
   updateRenderState()
   renderer?.refresh()
   if (result.topologyChanged || shouldResume) startLayout()
@@ -793,18 +926,19 @@ onMounted(async () => {
       shouldEnableNativeEdgeEvents({ edgeCount: graph.size })
 
     renderer = new Sigma(graph, container.value, {
+      ...(massiveGraph.value ? { defaultDrawNodeHover: drawMassiveNodeHover } : {}),
       allowInvalidContainer: true,
       defaultEdgeType: massiveGraph.value ? 'line' : 'arrow',
       enableEdgeEvents: nativeEdgeEventsEnabled,
       hideEdgesOnMove: true,
       hideLabelsOnMove: true,
-      // The label grid already limits overview labels to roughly one per
-      // occupied cell and reveals more while zooming. Keep its size threshold
-      // below the default six-pixel node, otherwise every overview label is
-      // rejected before the grid can do that adaptive work.
-      labelDensity: 0.08,
+      // Entity names are the graph's primary reading surface. Standard WebGL
+      // graphs let Sigma paint every name. Massive graphs use the cooperative
+      // overlay above so 5k+ canvas text calls cannot become one long task.
+      renderLabels: !massiveGraph.value,
+      labelDensity: massiveGraph.value ? 0 : Number.POSITIVE_INFINITY,
       labelGridCellSize: massiveGraph.value ? 170 : 140,
-      labelRenderedSizeThreshold: massiveGraph.value ? 5 : 5.5,
+      labelRenderedSizeThreshold: 0,
       minCameraRatio: 0.04,
       maxCameraRatio: 5,
       renderEdgeLabels: !massiveGraph.value && (
@@ -866,6 +1000,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true
   styleRefreshToken += 1
+  clearMassiveNodeLabelWork()
   if (syncFrame !== null) cancelAnimationFrame(syncFrame)
   if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
   if (resizeTimer !== null) window.clearTimeout(resizeTimer)
@@ -885,6 +1020,7 @@ onBeforeUnmount(() => {
   stopLayout({ kill: true })
   renderer?.kill()
   renderer = null
+  nodeLabelContext = null
   edgeLabelContext = null
   graph?.clear()
   graph = null
@@ -918,16 +1054,19 @@ defineExpose({
   touch-action: none;
 }
 
+.large-graph-node-label-overlay,
 .large-graph-edge-label-overlay {
   position: absolute;
   inset: 0;
-  z-index: 2;
   pointer-events: none;
 }
 
+.large-graph-node-label-overlay { z-index: 1; }
+.large-graph-edge-label-overlay { z-index: 2; }
+
 .large-graph-view__message {
   position: absolute;
-  z-index: 1;
+  z-index: 3;
   inset: 50% auto auto 50%;
   transform: translate(-50%, -50%);
   padding: 8px 12px;
