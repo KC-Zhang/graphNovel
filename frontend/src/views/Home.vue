@@ -249,65 +249,24 @@
         </div>
       </section>
 
-      <!-- Release notes -->
-      <section class="release-notes-section" aria-labelledby="release-notes-title">
-        <div class="release-notes-aside">
+      <!-- Release timeline: full notes live on their own route -->
+      <section class="release-timeline-section" aria-labelledby="release-timeline-title">
+        <div class="release-timeline-head">
           <div class="panel-header">
-            <span class="status-dot">■</span> {{ $t('home.releaseNotesHeader') }}
+            <span class="status-dot">■</span> {{ $t('home.releaseTimelineHeader') }}
           </div>
-          <div class="release-date">2026.07.18</div>
-          <span class="release-badge">{{ $t('home.releaseBadge') }}</span>
+          <h2 id="release-timeline-title" class="section-title">{{ $t('home.releaseTimelineHeading') }}</h2>
         </div>
 
-        <div class="release-notes-content">
-          <h2 id="release-notes-title" class="section-title">{{ $t('home.releaseTitle') }}</h2>
-          <p class="release-intro">{{ $t('home.releaseIntro') }}</p>
-
-          <ol class="release-list">
-            <li class="release-item">
-              <span class="release-item-num">01</span>
-              <div>
-                <h3>{{ $t('home.releaseGraphTitle') }}</h3>
-                <p>{{ $t('home.releaseGraphDesc') }}</p>
-              </div>
-            </li>
-            <li class="release-item">
-              <span class="release-item-num">02</span>
-              <div>
-                <h3>{{ $t('home.releasePdfTitle') }}</h3>
-                <p>{{ $t('home.releasePdfDesc') }}</p>
-              </div>
-            </li>
-            <li class="release-item">
-              <span class="release-item-num">03</span>
-              <div>
-                <h3>{{ $t('home.releaseChaptersTitle') }}</h3>
-                <p>{{ $t('home.releaseChaptersDesc') }}</p>
-              </div>
-            </li>
-            <li class="release-item">
-              <span class="release-item-num">04</span>
-              <div>
-                <h3>{{ $t('home.releaseSpeedTitle') }}</h3>
-                <p>{{ $t('home.releaseSpeedDesc') }}</p>
-              </div>
-            </li>
-            <li class="release-item">
-              <span class="release-item-num">05</span>
-              <div>
-                <h3>{{ $t('home.releaseRelationsTitle') }}</h3>
-                <p>{{ $t('home.releaseRelationsDesc') }}</p>
-              </div>
-            </li>
-            <li class="release-item">
-              <span class="release-item-num">06</span>
-              <div>
-                <h3>{{ $t('home.releaseRecoveryTitle') }}</h3>
-                <p>{{ $t('home.releaseRecoveryDesc') }}</p>
-              </div>
-            </li>
-          </ol>
-        </div>
+        <ol class="release-timeline">
+          <li id="release-2026-07-18" class="release-timeline-item">
+            <time datetime="2026-07-18">2026.07.18</time>
+            <RouterLink :to="{ name: 'ReleaseNotes', hash: '#2026-07-18-big-books' }">
+              <span>{{ $t('home.releaseTimelineTitle') }}</span>
+              <span class="release-timeline-cta">{{ $t('home.releaseTimelineCta') }} →</span>
+            </RouterLink>
+          </li>
+        </ol>
       </section>
     </div>
   </div>
@@ -329,7 +288,7 @@ const features = [
   { num: '01', icon: '❖', titleKey: 'home.feat1Title', descKey: 'home.feat1Desc' },
   { num: '02', icon: '⧉', titleKey: 'home.feat2Title', descKey: 'home.feat2Desc' },
   { num: '03', icon: '⇄', titleKey: 'home.feat3Title', descKey: 'home.feat3Desc' },
-  { num: '04', icon: '↕', titleKey: 'home.feat4Title', descKey: 'home.feat4Desc' },
+  { num: '04', icon: '§', titleKey: 'home.feat4Title', descKey: 'home.feat4Desc' },
   { num: '05', icon: '◐', titleKey: 'home.feat5Title', descKey: 'home.feat5Desc' },
   { num: '06', icon: '▤', titleKey: 'home.feat6Title', descKey: 'home.feat6Desc' },
 ]
@@ -1134,104 +1093,72 @@ onUnmounted(() => {
   color: var(--gray-text);
 }
 
-/* Release notes */
-.release-notes-section {
+/* Release timeline */
+.release-timeline-section {
   display: grid;
-  grid-template-columns: minmax(180px, 0.32fr) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);
   gap: 56px;
   margin-top: 80px;
   padding: 60px 0 8px;
   border-top: 1px solid var(--border);
 }
 
-.release-notes-aside {
+.release-timeline-head {
   align-self: start;
-  position: sticky;
-  top: 24px;
 }
 
-.release-date {
-  margin: 4px 0 14px;
-  font-family: var(--font-mono);
-  font-size: clamp(1.45rem, 2.4vw, 2.35rem);
-  font-weight: 700;
-  letter-spacing: -0.05em;
+.release-timeline-head .section-title {
+  max-width: 330px;
+  margin-bottom: 0;
 }
 
-.release-badge {
-  display: inline-block;
-  padding: 5px 9px;
-  background: var(--orange);
-  color: var(--white);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.release-notes-content .section-title {
-  max-width: 720px;
-  font-size: clamp(2rem, 4vw, 3.3rem);
-  line-height: 1.08;
-  letter-spacing: -0.045em;
-}
-
-.release-intro {
-  max-width: 760px;
-  margin: 0 0 34px;
-  color: var(--gray-text);
-  font-size: 1.05rem;
-  line-height: 1.75;
-}
-
-.release-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.release-timeline {
   margin: 0;
   padding: 0;
   border-top: 1px solid var(--black);
   list-style: none;
 }
 
-.release-item {
+.release-timeline-item {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 14px;
-  min-height: 164px;
-  padding: 24px 28px 24px 0;
+  grid-template-columns: 132px minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+  min-height: 118px;
   border-bottom: 1px solid var(--border);
 }
 
-.release-item:nth-child(odd) {
-  padding-right: 32px;
-  border-right: 1px solid var(--border);
-}
-
-.release-item:nth-child(even) {
-  padding-left: 28px;
-}
-
-.release-item-num {
-  padding-top: 3px;
+.release-timeline-item time {
   color: var(--orange);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 700;
 }
 
-.release-item h3 {
-  margin: 0 0 9px;
-  font-size: 1rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+.release-timeline-item a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+  color: var(--black);
+  text-decoration: none;
+  font-size: clamp(1.05rem, 2vw, 1.45rem);
+  font-weight: 560;
+  letter-spacing: -0.025em;
 }
 
-.release-item p {
-  margin: 0;
+.release-timeline-item a:hover > span:first-child {
+  color: var(--orange);
+}
+
+.release-timeline-cta {
+  flex: 0 0 auto;
   color: var(--gray-text);
-  font-size: 0.88rem;
-  line-height: 1.65;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 .library-section {
@@ -1268,13 +1195,9 @@ onUnmounted(() => {
     max-width: 780px;
   }
 
-  .release-notes-section {
+  .release-timeline-section {
     grid-template-columns: 1fr;
     gap: 32px;
-  }
-
-  .release-notes-aside {
-    position: static;
   }
 }
 
@@ -1311,21 +1234,21 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .release-notes-section {
+  .release-timeline-section {
     margin-top: 56px;
     padding-top: 44px;
   }
 
-  .release-list {
+  .release-timeline-item {
     grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 22px 0;
   }
 
-  .release-item,
-  .release-item:nth-child(odd),
-  .release-item:nth-child(even) {
-    min-height: 0;
-    padding: 22px 0;
-    border-right: 0;
+  .release-timeline-item a {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
   }
 }
 </style>
