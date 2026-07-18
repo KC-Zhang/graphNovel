@@ -6,7 +6,7 @@
 
 **Read a book as a living knowledge graph.**
 </br>
-<em>Upload a PDF, EPUB, or TXT, and BookMiro turns it into a character-and-relationship graph that reveals itself, spoiler-free, as you read.</em>
+<em>Upload a book, paper, or textbook, and BookMiro turns it into a living knowledge graph without flattening away the original document.</em>
 
 [English](./README.md) | [中文文档](./README-ZH.md)
 
@@ -14,29 +14,21 @@
 
 ## Overview
 
-**BookMiro** converts a book into a knowledge graph and syncs it to your reading progress. Instead of dumping the whole graph up front, it reveals only what you have already read — so it never spoils what is coming.
+**BookMiro** converts books and academic documents into knowledge graphs and syncs them to your reading progress. Instead of dumping the whole graph up front, it reveals only what you have already read — so it never spoils what is coming.
 
-You only need to upload a book (PDF / EPUB / TXT / Markdown). BookMiro will:
+You only need to upload a book, paper, or textbook (PDF / EPUB / TXT / Markdown). BookMiro will:
 
 - Split it into ordered episodes (chapters, with a fixed-size fallback).
 - Extract entities (characters, places, organizations, items, concepts) and their relationships, **in the same language as the book**.
 - Reveal the graph chapter by chapter as you read, streaming new nodes/edges in as you advance.
 
-## Latest release · 2026-07-18
+## Release timeline
 
-All Chapters had become honest but unreadable: every name was there, and together they covered the graph. This release fixes that first, then works through the smaller things that make long, messy books feel fragile:
-
-- **The graph is visible again.** Dense overviews keep the names that help you orient, reject collisions, and reveal more labels as you zoom. Search and selected entities always keep their names. The same renderer is exercised against a 5,000-node / 20,000-relationship browser fixture.
-- **PDFs can be read by chapter or by physical page.** Papers and textbooks default to page mode, which keeps the original layout, images, and formatting; novels still default to chapters.
-- **Chapter detection is much less easily fooled.** EPUB navigation is used when available, while PDF outlines and page layout help avoid turning contents pages, citations, or page numbers into fake chapters.
-- **The reader gets out of your way.** It remains usable while the graph loads, handles narrow split views more naturally, and searches the book on the server instead of downloading every chapter first.
-- **Big graphs stay fast without being rearranged into something unrecognizable.** Large views keep every node and edge, settle into the familiar connected layout, and then freeze so the UI stays responsive.
-- **Relationships now read in the right direction:** source entity → relationship → target entity, with the arrow placed between the two entities instead of presenting the relationship like a form.
-- **Entity types are case-insensitive.** `concept`, `Concept`, and whitespace variants now belong to the same type and share one color.
-- **Extraction failures are recoverable.** A failed chapter can be retried directly, with an optional OpenRouter fallback when the primary LLM provider rejects a request.
+- **2026-07-18** — [Academic pages stay intact. Large graphs stay readable.](./release-notes/2026-07-18-big-books-update.md)
 
 ## Features
 
+- **Academic reading mode**: read papers and textbooks as their original PDF pages, preserving structure, formulas, figures, tables, and formatting while keeping search highlights and graph source jumps available.
 - **Reading-synced reveal**: the graph grows as you progress; already-read chapters only. Newly introduced nodes pulse so you can spot "what's new this chapter".
 - **Language-locked extraction**: a Chinese book yields Chinese nodes, edge labels, and types — never mismatched English.
 - **Jump to the source**: every node and relationship stores verbatim quotes; click to jump into the book text and read the surrounding context, with the passage highlighted.

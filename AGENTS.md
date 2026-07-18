@@ -11,8 +11,10 @@ This file is a living index for future agents working in this repo. Update it wh
 - `backend/app/services/graph_extractor.py` - chapter/chunk entity extraction, entity merge rules, graph construction, and fallback retry use.
 - `backend/app/services/extraction_manager.py` - per-project background extraction worker, failed episode tracking, and retry scheduling.
 - `backend/app/api/graph.py` - upload/project/episode/graph/extraction API routes, bounded book search, and graph full/delta responses.
+- `frontend/src/releaseNotes.js` - structured English and Chinese release-note content rendered by the dedicated release route.
 - `frontend/src/views/ReaderView.vue` - reader shell, chapter navigation, read progress, server search, graph delta polling, and retry action wiring.
-- `frontend/src/views/Home.vue` - PageAndNode landing page, upload/library entry points, capability overview, and bilingual release-notes section.
+- `frontend/src/views/Home.vue` - PageAndNode landing page, upload/library entry points, capability overview, and compact bilingual release timeline.
+- `frontend/src/views/ReleaseNotesView.vue` - dedicated bilingual release-note page linked from the landing timeline.
 - `frontend/src/components/PdfPageView.vue` - PDF.js canvas/text-layer rendering, search highlights, and graph mention overlays.
 - `frontend/src/components/GraphPanel.vue` - keyed incremental D3 graph visualization, large-graph renderer switching, graph controls, and directional relationship detail panels.
 - `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL renderer with cooperative hydration, collision-safe semantic-zoom labels, a bounded relationship-label canvas, dense-graph camera input, and bounded/frozen ForceAtlas2 layout.
@@ -41,7 +43,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - Massive all-chapter graphs keep every node and edge but use a static WebGL profile that avoids continuous layout refreshes, native edge-picking buffers, and repeated wheel renders.
 - Full-graph WebGL views keep the topology readable with collision-safe semantic labels: high-connectivity entities win overview priority, more local names appear as the camera zooms, and selected/search targets always remain eligible. Massive graphs rebuild this bounded label overlay cooperatively after camera movement. Dense relationship labels remain opt-in and render through a bounded overlay rather than Sigma's all-edge label pass.
 - Standard WebGL graphs retain the original unweighted ForceAtlas2 topology for a bounded 6.5-second worker window after a topology change, then stop and kill the worker while preserving the settled positions. Dense overviews use a compact 12px label base with smooth capped growth for more-connected nodes; both tiers scale together with a deliberately damped camera-zoom curve.
-- The landing page carries a dated, bilingual release-notes section; `README.md` and `README-ZH.md` mirror the same shipped capabilities in repository-oriented language rather than copying the homepage verbatim.
+- The landing page carries only a compact, dated bilingual release timeline. Full release narratives live on the dedicated `/release-notes` route and under `release-notes/`; `README.md` and `README-ZH.md` also keep timeline links instead of embedding full notes.
 
 ## Decisions
 
@@ -145,6 +147,24 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - Problem: an attempted hub-spreading optimization replaced the familiar graph structure with a nearly uniform scatter, reduced 1,000+ node labels to 9px, and made neutral links effectively disappear because translucent edge colors were composited with Sigma's premultiplied-alpha blend mode.
  Fix: restore the original unweighted ForceAtlas2 settings and 6.5-second window, use an opaque neutral edge color, keep edges visible while ordinary graphs move, and freeze the exact settled coordinates. Use a compact dense-graph label base, enlarge high-connection nodes with a capped logarithmic curve that does not influence layout, and apply the same damped camera zoom multiplier to both sizes.
+
+## Release Note System
+
+- Full repository notes live at `release-notes/YYYY-MM-DD-short-slug.md`; add a matching `.zh.md` file for Chinese.
+- Full website notes are structured in `frontend/src/releaseNotes.js` and rendered on the dedicated `/release-notes` route. Keep the route lazy-loaded so release prose and layout stay off the landing-page critical path.
+- `Home.vue`, `README.md`, and `README-ZH.md` are indexes only. They may show a newest-first timeline with the date and linked title, but never the full narrative, screenshots, detailed bullets, or validation section.
+- Use the same release date and outcome-focused title in the website timeline, both README timelines, and both full notes.
+- Write every full note in this order:
+  1. State the user-visible outcome and the important non-change in the opening paragraph.
+  2. Use “Think of it as...” and a compact comparison table when two modes, states, or mechanisms are easy to confuse.
+  3. Use “For this release, we:” and an ordered sequence of concrete inputs, actions, and outputs.
+  4. Use “So:” for explicit conclusions, including what did not happen or what data was not removed.
+  5. Use “One important detail:” for the main limitation, tradeoff, or likely misunderstanding.
+  6. End with `Validation`, listing only checks that actually ran or named acceptance fixtures that exist in the repository.
+- Prefer exact nouns and mechanisms. Name the reading mode, document type, renderer, preserved page elements, graph scope, and test-fixture size when they matter.
+- Avoid headings such as “Improvements,” “Updates,” or “Better experience,” and avoid unsupported adjectives such as “seamless,” “powerful,” or “blazing fast.”
+- Keep documentation-only changes separate from runtime changes. Never imply that a browser test, provider call, deployment, or production verification occurred unless it did.
+- Update English and Chinese together, then verify every timeline link and route before calling the release note complete.
 
 ## Maintenance Notes
 

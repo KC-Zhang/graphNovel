@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 // ReaderView pulls in graph and PDF rendering code. Route-level chunks keep
 // those libraries off the landing-page critical path.
 const Home = () => import('../views/Home.vue')
+const ReleaseNotesView = () => import('../views/ReleaseNotesView.vue')
 const ReaderView = () => import('../views/ReaderView.vue')
 
 const routes = [
@@ -10,6 +11,11 @@ const routes = [
     path: '/',
     name: 'Home',
     component: Home
+  },
+  {
+    path: '/release-notes',
+    name: 'ReleaseNotes',
+    component: ReleaseNotesView
   },
   {
     path: '/read/:projectId',
