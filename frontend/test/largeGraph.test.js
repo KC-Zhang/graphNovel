@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   accumulatedWheelZoomRatio,
   colorWithAlpha,
+  degreeAwareLayoutWeight,
   findClosestEdgeAtPoint,
   hydrateGraphologyGraphCooperatively,
   inferLargeGraphLayoutSettings,
@@ -80,6 +81,13 @@ test('massive graphs use the static first-paint profile at either limit', () => 
   assert.equal(shouldUseMassiveGraphProfile({ nodeCount: 100, edgeCount: 8000 }), true)
 })
 
+test('layout attraction weakens symmetrically around high-degree hubs', () => {
+  assert.equal(degreeAwareLayoutWeight({ sourceDegree: 1, targetDegree: 1 }), 1)
+  assert.equal(degreeAwareLayoutWeight({ sourceDegree: 4, targetDegree: 2 }), 0.5)
+  assert.equal(degreeAwareLayoutWeight({ sourceDegree: 2, targetDegree: 100 }), 0.25)
+  assert.equal(degreeAwareLayoutWeight({ sourceDegree: 100, targetDegree: 2 }), 0.25)
+})
+
 test('massive edge labels are deterministic, diverse, and strictly budgeted', () => {
   const edges = Array.from({ length: 120 }, (_, index) => ({
     id: `e${index}`,
@@ -141,13 +149,18 @@ test('click-time edge picking preserves direct selection for dense graphs', () =
 
 test('large graph layout settings are inferred without the synchronous layout bundle', () => {
   assert.deepEqual(inferLargeGraphLayoutSettings({ order: 100 }), {
+    linLogMode: false,
+    outboundAttractionDistribution: false,
+    adjustSizes: false,
+    edgeWeightInfluence: 1,
     barnesHutOptimize: false,
+    barnesHutTheta: 0.7,
     strongGravityMode: true,
-    gravity: 0.05,
-    scalingRatio: 10,
+    gravity: 0.5,
+    scalingRatio: 20,
     slowDown: 1 + Math.log(100),
   })
-  assert.equal(inferLargeGraphLayoutSettings(2001).barnesHutOptimize, true)
+  assert.equal(inferLargeGraphLayoutSettings(500).barnesHutOptimize, true)
 })
 
 test('incremental sync preserves positions and places a new neighbour nearby', () => {

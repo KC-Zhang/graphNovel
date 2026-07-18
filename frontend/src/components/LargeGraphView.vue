@@ -36,6 +36,7 @@ import { entityTypeKey } from '../utils/entityTypes'
 import {
   accumulatedWheelZoomRatio,
   colorWithAlpha,
+  degreeAwareLayoutWeight,
   findClosestEdgeAtPoint,
   graphNodeKey,
   hydrateGraphologyGraphCooperatively,
@@ -60,7 +61,7 @@ const props = defineProps({
   focusedEdgeIds: { type: [Array, Set], default: () => [] },
   showEdgeLabels: { type: Boolean, default: false },
   layoutEnabled: { type: Boolean, default: true },
-  layoutDurationMs: { type: Number, default: 6500 },
+  layoutDurationMs: { type: Number, default: 3500 },
   layoutSettings: { type: Object, default: () => ({}) },
   ariaLabel: { type: String, default: 'Knowledge graph' },
 })
@@ -120,6 +121,8 @@ const renderState = {
 
 let typeColorSource = null
 let typeColorLookup = new Map()
+let layoutDegreeSource = null
+let layoutDegreeLookup = new Map()
 let edgeLabelCandidateSource = null
 let edgeLabelCandidates = new Set()
 let nodeLabelKeysSource = null
@@ -179,10 +182,35 @@ const nodeAttributes = (node, key) => ({
   rawData: node,
 })
 
+const layoutWeightForEdge = edge => {
+  if (massiveGraph.value) return 1
+  if (layoutDegreeSource !== props.edges) {
+    const degree = new Map()
+    for (const record of props.edges || []) {
+      const source = asKey(record?.source)
+      const target = asKey(record?.target)
+      if (!source || !target) continue
+      degree.set(source, (degree.get(source) || 0) + 1)
+      degree.set(target, (degree.get(target) || 0) + 1)
+    }
+    layoutDegreeLookup = degree
+    layoutDegreeSource = props.edges
+  }
+  // Ordinary relationships keep full attraction. Edges touching book-wide
+  // hubs gradually weaken, but never disappear from the layout or renderer.
+  return degreeAwareLayoutWeight({
+    sourceDegree: layoutDegreeLookup.get(asKey(edge?.source)) || 0,
+    targetDegree: layoutDegreeLookup.get(asKey(edge?.target)) || 0,
+  })
+}
+
 const edgeAttributes = edge => ({
   label: edge?.label || edge?.name || '',
-  color: edge?.color || '#B8B8B8',
+  // Dense topology should remain available without becoming the darkest
+  // visual layer. Selection/focus reducers still replace this neutral color.
+  color: edge?.color || 'rgba(140, 140, 140, 0.46)',
   size: finiteSize(edge?.size, 1.1, 0.25, 8),
+  layoutWeight: layoutWeightForEdge(edge),
   type: massiveGraph.value ? 'line' : (edge?.type || 'arrow'),
   rawData: edge,
 })
@@ -683,6 +711,7 @@ const startLayout = () => {
   try {
     const inferred = inferLargeGraphLayoutSettings(graph)
     layout = new ForceAtlas2Layout(graph, {
+      getEdgeWeight: 'layoutWeight',
       settings: { ...inferred, ...props.layoutSettings },
     })
     layoutRemainingMs = Math.max(0, props.layoutDurationMs)
@@ -939,6 +968,7 @@ onMounted(async () => {
       labelDensity: massiveGraph.value ? 0 : Number.POSITIVE_INFINITY,
       labelGridCellSize: massiveGraph.value ? 170 : 140,
       labelRenderedSizeThreshold: 0,
+      labelSize: props.nodes.length >= 1000 ? 9 : 11,
       minCameraRatio: 0.04,
       maxCameraRatio: 5,
       renderEdgeLabels: !massiveGraph.value && (

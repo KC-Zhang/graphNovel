@@ -33,6 +33,15 @@ export const shouldUseMassiveGraphProfile = ({
   Number(nodeCount) >= nodeThreshold || Number(edgeCount) >= edgeThreshold
 )
 
+export const degreeAwareLayoutWeight = ({
+  sourceDegree = 0,
+  targetDegree = 0,
+  minimum = 0.25,
+} = {}) => {
+  const degree = Math.max(1, Number(sourceDegree) || 0, Number(targetDegree) || 0)
+  return Math.max(Math.max(0, Number(minimum) || 0), 1 / Math.sqrt(degree))
+}
+
 /**
  * Pick a small, stable set of useful relationship labels for a massive graph.
  * Sigma still renders every edge in WebGL; this only bounds the much more
@@ -145,10 +154,19 @@ export const inferLargeGraphLayoutSettings = (graphOrOrder) => {
   const rawOrder = typeof graphOrOrder === 'number' ? graphOrOrder : graphOrOrder?.order
   const order = Math.max(0, Number(rawOrder) || 0)
   return {
-    barnesHutOptimize: order > 2000,
+    // Hub-aware edge weights are attached during Graphology hydration. Keep
+    // ForceAtlas2's attraction symmetric so reversing a semantic relationship
+    // cannot change the layout, while retaining enough gravity to keep the
+    // many small/disconnected components near the readable graph body.
+    linLogMode: false,
+    outboundAttractionDistribution: false,
+    adjustSizes: false,
+    edgeWeightInfluence: 1,
+    barnesHutOptimize: order >= LARGE_GRAPH_NODE_THRESHOLD,
+    barnesHutTheta: 0.7,
     strongGravityMode: true,
-    gravity: 0.05,
-    scalingRatio: 10,
+    gravity: 0.5,
+    scalingRatio: 20,
     slowDown: 1 + Math.log(Math.max(1, order)),
   }
 }
