@@ -22,13 +22,26 @@ You only need to upload a book (PDF / EPUB / TXT / Markdown). BookMiro will:
 - Extract entities (characters, places, organizations, items, concepts) and their relationships, **in the same language as the book**.
 - Reveal the graph chapter by chapter as you read, streaming new nodes/edges in as you advance.
 
+## Latest release · 2026-07-18
+
+All Chapters had become honest but unreadable: every name was there, and together they covered the graph. This release fixes that first, then works through the smaller things that make long, messy books feel fragile:
+
+- **The graph is visible again.** Dense overviews keep the names that help you orient, reject collisions, and reveal more labels as you zoom. Search and selected entities always keep their names. The same renderer is exercised against a 5,000-node / 20,000-relationship browser fixture.
+- **PDFs can be read by chapter or by physical page.** Papers and textbooks default to page mode, which keeps the original layout, images, and formatting; novels still default to chapters.
+- **Chapter detection is much less easily fooled.** EPUB navigation is used when available, while PDF outlines and page layout help avoid turning contents pages, citations, or page numbers into fake chapters.
+- **The reader gets out of your way.** It remains usable while the graph loads, handles narrow split views more naturally, and searches the book on the server instead of downloading every chapter first.
+- **Big graphs stay fast without being rearranged into something unrecognizable.** Large views keep every node and edge, settle into the familiar connected layout, and then freeze so the UI stays responsive.
+- **Relationships now read in the right direction:** source entity → relationship → target entity, with the arrow placed between the two entities instead of presenting the relationship like a form.
+- **Entity types are case-insensitive.** `concept`, `Concept`, and whitespace variants now belong to the same type and share one color.
+- **Extraction failures are recoverable.** A failed chapter can be retried directly, with an optional OpenRouter fallback when the primary LLM provider rejects a request.
+
 ## Features
 
 - **Reading-synced reveal**: the graph grows as you progress; already-read chapters only. Newly introduced nodes pulse so you can spot "what's new this chapter".
 - **Language-locked extraction**: a Chinese book yields Chinese nodes, edge labels, and types — never mismatched English.
 - **Jump to the source**: every node and relationship stores verbatim quotes; click to jump into the book text and read the surrounding context, with the passage highlighted.
 - **Effortless relationship browsing (edge reel)**: select a character and scroll or arrow-key through all of its relationships, each auto-highlighting on the graph.
-- **Lazy + streaming**: extraction runs on demand around your reading position (with a small look-ahead), so reading starts instantly and the graph fills in as you go.
+- **Background + streaming**: reading starts immediately while extraction continues chapter by chapter through the whole book; graph updates arrive as small deltas instead of repeatedly downloading the full graph.
 
 ## Quick Start
 

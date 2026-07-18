@@ -33,13 +33,41 @@ export const shouldUseMassiveGraphProfile = ({
   Number(nodeCount) >= nodeThreshold || Number(edgeCount) >= edgeThreshold
 )
 
-export const degreeAwareLayoutWeight = ({
-  sourceDegree = 0,
-  targetDegree = 0,
-  minimum = 0.25,
+// Dense graph labels need a quieter base than the SVG graph. Increase visual
+// emphasis smoothly as incident relationships accumulate, while keeping even
+// book-wide hubs compact enough to coexist with the topology.
+export const degreeAwareNodeLabelSize = ({
+  connectionCount = 0,
+  baseSize = 12,
+  maxSize = 18,
+  ordinaryConnectionCount = 3,
+  growth = 0.9,
 } = {}) => {
-  const degree = Math.max(1, Number(sourceDegree) || 0, Number(targetDegree) || 0)
-  return Math.max(Math.max(0, Number(minimum) || 0), 1 / Math.sqrt(degree))
+  const base = Math.max(1, Number(baseSize) || 12)
+  const maximum = Math.max(base, Number(maxSize) || 18)
+  const ordinary = Math.max(0, Number(ordinaryConnectionCount) || 0)
+  const connections = Math.max(0, Number(connectionCount) || 0)
+  const scale = Math.max(0, Number(growth) || 0)
+  return Math.min(maximum, base + scale * Math.log1p(
+    Math.max(0, connections - ordinary),
+  ))
+}
+
+// Sigma's camera ratio is inverse zoom (smaller means closer). Text should gain
+// a little emphasis as the user enters a neighbourhood, but must not scale at
+// the same rate as graph geometry or it quickly covers nearby nodes.
+export const graphZoomLabelScale = ({
+  cameraRatio = 1,
+  minScale = 0.78,
+  maxScale = 1.6,
+  exponent = 0.3,
+} = {}) => {
+  const rawRatio = Number(cameraRatio)
+  const ratio = Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : 1
+  const minimum = Math.max(0.01, Number(minScale) || 0.78)
+  const maximum = Math.max(minimum, Number(maxScale) || 1.6)
+  const power = Math.max(0, Number(exponent) || 0.3)
+  return Math.max(minimum, Math.min(maximum, ratio ** -power))
 }
 
 /**
@@ -154,19 +182,10 @@ export const inferLargeGraphLayoutSettings = (graphOrOrder) => {
   const rawOrder = typeof graphOrOrder === 'number' ? graphOrOrder : graphOrOrder?.order
   const order = Math.max(0, Number(rawOrder) || 0)
   return {
-    // Hub-aware edge weights are attached during Graphology hydration. Keep
-    // ForceAtlas2's attraction symmetric so reversing a semantic relationship
-    // cannot change the layout, while retaining enough gravity to keep the
-    // many small/disconnected components near the readable graph body.
-    linLogMode: false,
-    outboundAttractionDistribution: false,
-    adjustSizes: false,
-    edgeWeightInfluence: 1,
-    barnesHutOptimize: order >= LARGE_GRAPH_NODE_THRESHOLD,
-    barnesHutTheta: 0.7,
+    barnesHutOptimize: order > 2000,
     strongGravityMode: true,
-    gravity: 0.5,
-    scalingRatio: 20,
+    gravity: 0.05,
+    scalingRatio: 10,
     slowDown: 1 + Math.log(Math.max(1, order)),
   }
 }
@@ -243,9 +262,9 @@ const addEdgeWithKey = (graph, key, source, target, attributes) => {
 }
 
 const defaultYieldControl = () => {
-  if (typeof globalThis.scheduler?.yield === 'function') {
-    return globalThis.scheduler.yield()
-  }
+  // scheduler.yield continuations receive boosted priority in Chromium and
+  // can starve input/timer work across a long hydration chain. A macrotask
+  // turn gives the reader and heartbeat a real chance to run between slices.
   return new Promise(resolve => setTimeout(resolve, 0))
 }
 

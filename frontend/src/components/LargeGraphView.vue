@@ -12,6 +12,7 @@
     :data-node-label-count="renderedNodeLabelCount"
     :data-edge-label-count="renderedEdgeLabelCount"
     :data-layout-mode="graphLayoutMode"
+    :data-layout-status="massiveGraph ? 'static' : layoutStatus"
   >
     <canvas
       ref="nodeLabelCanvas"
@@ -36,8 +37,9 @@ import { entityTypeKey } from '../utils/entityTypes'
 import {
   accumulatedWheelZoomRatio,
   colorWithAlpha,
-  degreeAwareLayoutWeight,
+  degreeAwareNodeLabelSize,
   findClosestEdgeAtPoint,
+  graphZoomLabelScale,
   graphNodeKey,
   hydrateGraphologyGraphCooperatively,
   inferLargeGraphLayoutSettings,
@@ -61,7 +63,7 @@ const props = defineProps({
   focusedEdgeIds: { type: [Array, Set], default: () => [] },
   showEdgeLabels: { type: Boolean, default: false },
   layoutEnabled: { type: Boolean, default: true },
-  layoutDurationMs: { type: Number, default: 3500 },
+  layoutDurationMs: { type: Number, default: 6500 },
   layoutSettings: { type: Object, default: () => ({}) },
   ariaLabel: { type: String, default: 'Knowledge graph' },
 })
@@ -76,6 +78,7 @@ const status = ref('loading')
 const nodeLabelStatus = ref('loading')
 const renderedNodeLabelCount = ref(0)
 const renderedEdgeLabelCount = ref(0)
+const layoutStatus = ref('idle')
 const massiveGraph = computed(() => shouldUseMassiveGraphProfile({
   nodeCount: props.nodes.length,
   edgeCount: props.edges.length,
@@ -105,6 +108,11 @@ let styleRefreshToken = 0
 let wheelTimer = null
 let wheelSteps = 0
 let wheelPoint = null
+let standardNodeLabelBounds = []
+let standardNodeLabelsPainted = 0
+let nodeLabelTopInset = 0
+let nodeLabelViewportWidth = Number.POSITIVE_INFINITY
+let nodeLabelViewportHeight = Number.POSITIVE_INFINITY
 
 const renderState = {
   selectedNode: null,
@@ -121,8 +129,8 @@ const renderState = {
 
 let typeColorSource = null
 let typeColorLookup = new Map()
-let layoutDegreeSource = null
-let layoutDegreeLookup = new Map()
+let connectionCountSource = null
+let connectionCountLookup = new Map()
 let edgeLabelCandidateSource = null
 let edgeLabelCandidates = new Set()
 let nodeLabelKeysSource = null
@@ -175,42 +183,50 @@ const colorForType = (type, rawColor) => {
   return typeColorLookup.get(key) || colorValue(rawColor) || '#7B2D8E'
 }
 
-const nodeAttributes = (node, key) => ({
-  label: node?.name || node?.label || key,
-  color: colorForType(node?.type, node?.color),
-  size: finiteSize(node?.size, 6, 2, 24),
-  rawData: node,
-})
-
-const layoutWeightForEdge = edge => {
-  if (massiveGraph.value) return 1
-  if (layoutDegreeSource !== props.edges) {
-    const degree = new Map()
-    for (const record of props.edges || []) {
-      const source = asKey(record?.source)
-      const target = asKey(record?.target)
-      if (!source || !target) continue
-      degree.set(source, (degree.get(source) || 0) + 1)
-      degree.set(target, (degree.get(target) || 0) + 1)
-    }
-    layoutDegreeLookup = degree
-    layoutDegreeSource = props.edges
+const rebuildConnectionCountLookup = () => {
+  if (connectionCountSource === props.edges) return
+  const next = new Map()
+  for (const edge of props.edges || []) {
+    const source = asKey(edge?.source)
+    const target = asKey(edge?.target)
+    if (source) next.set(source, (next.get(source) || 0) + 1)
+    if (target) next.set(target, (next.get(target) || 0) + 1)
   }
-  // Ordinary relationships keep full attraction. Edges touching book-wide
-  // hubs gradually weaken, but never disappear from the layout or renderer.
-  return degreeAwareLayoutWeight({
-    sourceDegree: layoutDegreeLookup.get(asKey(edge?.source)) || 0,
-    targetDegree: layoutDegreeLookup.get(asKey(edge?.target)) || 0,
-  })
+  connectionCountLookup = next
+  connectionCountSource = props.edges
+}
+
+const connectionCountForNode = key => {
+  rebuildConnectionCountLookup()
+  return connectionCountLookup.get(String(key)) || 0
+}
+
+const nodeAttributes = (node, key) => {
+  const label = node?.name || node?.label || key
+  // The massive first-paint path defers the full 20k-edge degree scan until
+  // its label overlay timer, keeping Sigma construction off the critical
+  // Current -> All interaction. Standard graphs use degree immediately so
+  // Sigma's moving label grid can prioritize hubs.
+  const connectionCount = massiveGraph.value ? 0 : connectionCountForNode(key)
+  return {
+    // Massive graphs paint names on the cooperative overlay below.
+    // Keeping Sigma's unused label null prevents its synchronous constructor
+    // from indexing 5k+ names into a collision grid that will never render.
+    label: massiveGraph.value ? null : label,
+    overlayLabel: label,
+    color: colorForType(node?.type, node?.color),
+    // A small degree boost gives Sigma's collision grid a meaningful label
+    // priority and makes important entities legible without changing layout.
+    size: finiteSize(node?.size, 6, 2, 24) + Math.min(3.5, Math.log1p(connectionCount) * 0.55),
+    connectionCount,
+    rawData: node,
+  }
 }
 
 const edgeAttributes = edge => ({
   label: edge?.label || edge?.name || '',
-  // Dense topology should remain available without becoming the darkest
-  // visual layer. Selection/focus reducers still replace this neutral color.
-  color: edge?.color || 'rgba(140, 140, 140, 0.46)',
+  color: edge?.color || '#B8B8B8',
   size: finiteSize(edge?.size, 1.1, 0.25, 8),
-  layoutWeight: layoutWeightForEdge(edge),
   type: massiveGraph.value ? 'line' : (edge?.type || 'arrow'),
   rawData: edge,
 })
@@ -346,6 +362,98 @@ const needsInteractiveReducers = () => Boolean(
   renderState.hasExplicitFocus
 )
 
+const currentLabelZoomScale = () => graphZoomLabelScale({
+  cameraRatio: renderer?.getCamera()?.getState()?.ratio,
+})
+
+const nodeLabelSize = data => (
+  degreeAwareNodeLabelSize({ connectionCount: data?.connectionCount }) *
+  currentLabelZoomScale()
+)
+
+const paintDegreeAwareNodeLabel = (context, data, settings, size) => {
+  if (!data.label) return
+  const color = settings.labelColor.attribute
+    ? data[settings.labelColor.attribute] || settings.labelColor.color || '#000'
+    : settings.labelColor.color
+  const x = data.x + data.size + 3
+  const y = data.y + size / 3
+  context.font = `${settings.labelWeight} ${size.toFixed(2)}px ${settings.labelFont}`
+  context.lineJoin = 'round'
+  context.lineWidth = 3
+  context.strokeStyle = 'rgba(255, 255, 255, 0.86)'
+  context.strokeText(data.label, x, y)
+  context.fillStyle = color
+  context.fillText(data.label, x, y)
+}
+
+const drawDegreeAwareNodeLabel = (context, data, settings) => {
+  if (!data.label) return
+  const size = nodeLabelSize(data)
+  context.font = `${settings.labelWeight} ${size.toFixed(2)}px ${settings.labelFont}`
+  const x = data.x + data.size + 3
+  const y = data.y + size / 3
+  const metrics = context.measureText(data.label)
+  const bounds = {
+    left: x - 2,
+    right: x + metrics.width + 2,
+    top: y - size - 2,
+    bottom: y + size * 0.32 + 2,
+  }
+  const selected = String(data.key) === renderState.selectedNode
+  const outsideSafeViewport = !selected && (
+    bounds.top < nodeLabelTopInset ||
+    bounds.left < 4 || bounds.right > nodeLabelViewportWidth - 4 ||
+    bounds.bottom > nodeLabelViewportHeight - 4
+  )
+  const overlapsLabel = !selected && standardNodeLabelBounds.some(
+    rect => rectanglesOverlap(rect, bounds, 3),
+  )
+  const crowded = outsideSafeViewport || overlapsLabel
+  if (crowded) return
+  standardNodeLabelBounds.push(bounds)
+  standardNodeLabelsPainted += 1
+  paintDegreeAwareNodeLabel(context, data, settings, size)
+}
+
+const drawDegreeAwareNodeHover = (context, data, settings) => {
+  const size = nodeLabelSize(data)
+  const hoverSettings = { ...settings, labelSize: size }
+  context.font = `${settings.labelWeight} ${size.toFixed(2)}px ${settings.labelFont}`
+  context.fillStyle = '#FFF'
+  context.shadowOffsetX = 0
+  context.shadowOffsetY = 0
+  context.shadowBlur = 8
+  context.shadowColor = '#000'
+  const padding = 2
+
+  if (typeof data.label === 'string') {
+    const boxWidth = Math.round(context.measureText(data.label).width + 5)
+    const boxHeight = Math.round(size + 2 * padding)
+    const radius = Math.max(data.size, size / 2) + padding
+    const angle = Math.asin(boxHeight / 2 / radius)
+    const xDelta = Math.sqrt(Math.abs(radius ** 2 - (boxHeight / 2) ** 2))
+    context.beginPath()
+    context.moveTo(data.x + xDelta, data.y + boxHeight / 2)
+    context.lineTo(data.x + radius + boxWidth, data.y + boxHeight / 2)
+    context.lineTo(data.x + radius + boxWidth, data.y - boxHeight / 2)
+    context.lineTo(data.x + xDelta, data.y - boxHeight / 2)
+    context.arc(data.x, data.y, radius, angle, -angle)
+    context.closePath()
+    context.fill()
+  } else {
+    context.beginPath()
+    context.arc(data.x, data.y, data.size + padding, 0, Math.PI * 2)
+    context.closePath()
+    context.fill()
+  }
+
+  context.shadowOffsetX = 0
+  context.shadowOffsetY = 0
+  context.shadowBlur = 0
+  paintDegreeAwareNodeLabel(context, data, hoverSettings, size)
+}
+
 const roundedRect = (context, x, y, width, height, radius) => {
   const r = Math.min(radius, width / 2, height / 2)
   context.beginPath()
@@ -393,10 +501,19 @@ const clearMassiveNodeLabelWork = ({ clear = false } = {}) => {
   nodeLabelTimer = null
   nodeLabelFrame = null
   if (clear) {
-    const layer = prepareOverlayCanvas(nodeLabelCanvas.value, nodeLabelContext)
-    if (layer) {
-      nodeLabelContext = layer.context
-      layer.context.clearRect(0, 0, layer.width, layer.height)
+    // Keep progressive text work out of the visible compositor tree. The
+    // complete overlay is revealed in one cheap publish step after all names
+    // have been painted, avoiding repeated WebGL readbacks on software GPUs.
+    if (nodeLabelCanvas.value) nodeLabelCanvas.value.style.visibility = 'hidden'
+    // On first mount the canvas is still blank. Defer its full-resolution
+    // allocation until the delayed paint actually starts, keeping that work
+    // out of Sigma's already busy constructor/first-frame task.
+    if (nodeLabelContext || renderedNodeLabelCount.value > 0) {
+      const layer = prepareOverlayCanvas(nodeLabelCanvas.value, nodeLabelContext)
+      if (layer) {
+        nodeLabelContext = layer.context
+        layer.context.clearRect(0, 0, layer.width, layer.height)
+      }
     }
     renderedNodeLabelCount.value = 0
     nodeLabelStatus.value = 'loading'
@@ -411,24 +528,20 @@ const currentNodeLabelKeys = () => {
   return nodeLabelKeys
 }
 
-const paintMassiveNodeLabelChunk = ({ generation, index, displayed, layer }) => {
+const paintMassiveNodeLabelChunk = ({
+  generation, index, displayed, layer, keys, occupied,
+}) => {
   if (
     disposed || generation !== nodeLabelGeneration ||
-    !massiveGraph.value || !renderer || !graph
+    !renderer || !graph
   ) return
 
-  const keys = currentNodeLabelKeys()
   const context = layer.context
   const startedAt = performance.now()
   let processed = 0
   const cameraRatio = Math.max(0.04, renderer.getCamera().getState().ratio || 1)
-  const denseOverview = keys.length >= 2000
-  const baseFontSize = denseOverview ? 8 : 10
-  const fontSize = Math.min(13, Math.max(baseFontSize, baseFontSize / Math.sqrt(cameraRatio)))
-  const baseOpacity = denseOverview ? Math.min(1, 0.68 / Math.sqrt(cameraRatio)) : 1
   const fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-  const normalFont = `500 ${fontSize.toFixed(1)}px ${fontFamily}`
-  context.font = normalFont
+  let activeFont = ''
   context.textAlign = 'left'
   context.textBaseline = 'middle'
 
@@ -439,7 +552,7 @@ const paintMassiveNodeLabelChunk = ({ generation, index, displayed, layer }) => 
     if (!graph.hasNode(key)) continue
     const point = renderer.graphToViewport(graph.getNodeAttributes(key))
     if (point.x < 0 || point.x > layer.width || point.y < 0 || point.y > layer.height) continue
-    const label = String(graph.getNodeAttribute(key, 'label') || '').trim()
+    const label = String(graph.getNodeAttribute(key, 'overlayLabel') || '').trim()
     if (!label) continue
 
     const selected = key === renderState.selectedNode
@@ -447,11 +560,51 @@ const paintMassiveNodeLabelChunk = ({ generation, index, displayed, layer }) => 
       !renderState.focusedNodes.has(key) && !renderState.accentNodes.has(key)
     const readAndFiltered = props.focusUnread &&
       renderState.seenNodes.has(key) && !renderState.accentNodes.has(key)
-    context.globalAlpha = outsideFocus || readAndFiltered ? baseOpacity * 0.18 : baseOpacity
-    context.fillStyle = selected ? '#C5283D' : '#333333'
-    if (selected) context.font = `700 ${(fontSize + 1).toFixed(1)}px ${fontFamily}`
-    context.fillText(label, point.x + 7, point.y)
-    if (selected) context.font = normalFont
+    context.fillStyle = selected ? '#C5283D' : '#28222B'
+    const connectionCount = massiveGraph.value
+      ? connectionCountForNode(key)
+      : graph.getNodeAttribute(key, 'connectionCount')
+    const fontSize = degreeAwareNodeLabelSize({
+      connectionCount,
+    }) * graphZoomLabelScale({ cameraRatio })
+    const font = `${selected ? 700 : 'normal'} ${(
+      fontSize + (selected ? 1 : 0)
+    ).toFixed(2)}px ${fontFamily}`
+    if (font !== activeFont) {
+      context.font = font
+      activeFont = font
+    }
+    const x = point.x + 7
+    const metrics = context.measureText(label)
+    const bounds = {
+      left: x - 2,
+      right: x + metrics.width + 2,
+      top: point.y - fontSize * 0.65 - 2,
+      bottom: point.y + fontSize * 0.65 + 2,
+    }
+    const outsideSafeViewport = !selected && (
+      bounds.left < 4 || bounds.right > layer.width - 4 ||
+      bounds.top < nodeLabelTopInset || bounds.bottom > layer.height - 4
+    )
+    const overlapsLabel = !selected && occupied.some(
+      rect => rectanglesOverlap(rect, bounds, 3),
+    )
+    const crowded = outsideSafeViewport || overlapsLabel
+    if (crowded) continue
+    occupied.push(bounds)
+
+    const normalOpacity = 0.88
+    context.globalAlpha = outsideFocus || readAndFiltered
+      ? normalOpacity * 0.2
+      : (selected ? 1 : normalOpacity)
+
+    context.lineJoin = 'round'
+    context.lineWidth = selected ? 4 : 3
+    context.strokeStyle = selected
+      ? 'rgba(255, 255, 255, 0.96)'
+      : 'rgba(255, 255, 255, 0.84)'
+    context.strokeText(label, x, point.y)
+    context.fillText(label, x, point.y)
     displayed += 1
   }
   context.globalAlpha = 1
@@ -460,20 +613,25 @@ const paintMassiveNodeLabelChunk = ({ generation, index, displayed, layer }) => 
   if (index < keys.length) {
     nodeLabelFrame = requestAnimationFrame(() => {
       nodeLabelFrame = null
-      paintMassiveNodeLabelChunk({ generation, index, displayed, layer })
+      paintMassiveNodeLabelChunk({ generation, index, displayed, layer, keys, occupied })
     })
   } else {
-    nodeLabelStatus.value = 'ready'
+    nodeLabelTimer = window.setTimeout(() => {
+      nodeLabelTimer = null
+      if (disposed || generation !== nodeLabelGeneration) return
+      if (nodeLabelCanvas.value) nodeLabelCanvas.value.style.visibility = 'visible'
+      nodeLabelStatus.value = 'ready'
+    }, 0)
   }
 }
 
 const scheduleMassiveNodeLabels = () => {
-  if (!massiveGraph.value || !renderer || !graph) return
+  if (!renderer || !graph) return
   clearMassiveNodeLabelWork({ clear: true })
   const generation = nodeLabelGeneration
   // Repeated camera/layout frames keep cancelling this short timer. Labels
-  // therefore stay hidden while moving, then the complete set is painted in
-  // cooperative chunks as soon as the graph settles.
+  // therefore stay hidden while moving, then the collision-safe set is painted
+  // in cooperative chunks as soon as the graph settles.
   nodeLabelTimer = window.setTimeout(() => {
     nodeLabelTimer = null
     if (disposed || generation !== nodeLabelGeneration) return
@@ -481,25 +639,33 @@ const scheduleMassiveNodeLabels = () => {
     if (!layer) return
     nodeLabelContext = layer.context
     layer.context.clearRect(0, 0, layer.width, layer.height)
-    paintMassiveNodeLabelChunk({ generation, index: 0, displayed: 0, layer })
+    const keys = [...currentNodeLabelKeys()].sort((left, right) => {
+      if (left === renderState.selectedNode) return -1
+      if (right === renderState.selectedNode) return 1
+      const leftAccent = renderState.accentNodes.has(left) ? 1 : 0
+      const rightAccent = renderState.accentNodes.has(right) ? 1 : 0
+      if (leftAccent !== rightAccent) return rightAccent - leftAccent
+      return connectionCountForNode(right) - connectionCountForNode(left) ||
+        String(left).localeCompare(String(right))
+    })
+    paintMassiveNodeLabelChunk({
+      generation,
+      index: 0,
+      displayed: 0,
+      layer,
+      keys,
+      occupied: [],
+    })
   }, 48)
 }
 
 const drawMassiveEdgeLabels = () => {
   const canvas = edgeLabelCanvas.value
   if (!canvas || !renderer || !graph || !massiveGraph.value) {
+    if (canvas) canvas.style.visibility = 'hidden'
     renderedEdgeLabelCount.value = 0
     return
   }
-
-  const layer = prepareOverlayCanvas(canvas, edgeLabelContext)
-  if (!layer) {
-    renderedEdgeLabelCount.value = 0
-    return
-  }
-  const { context, width, height } = layer
-  edgeLabelContext = context
-  context.clearRect(0, 0, width, height)
 
   const selectedEdge = renderState.selectedEdge
   const labelEdges = [...renderState.labelEdges]
@@ -510,6 +676,32 @@ const drawMassiveEdgeLabels = () => {
       labelEdges.unshift(selectedEdge)
     }
   }
+
+  // Edge labels are opt-in and normally empty. Avoid allocating and clearing
+  // another viewport-sized 2D surface on the critical first WebGL frame, and
+  // keep the unused canvas out of the compositor until it has content.
+  if (labelEdges.length === 0) {
+    if (renderedEdgeLabelCount.value > 0) {
+      const existingLayer = prepareOverlayCanvas(canvas, edgeLabelContext)
+      if (existingLayer) {
+        edgeLabelContext = existingLayer.context
+        existingLayer.context.clearRect(0, 0, existingLayer.width, existingLayer.height)
+      }
+    }
+    canvas.style.visibility = 'hidden'
+    renderedEdgeLabelCount.value = 0
+    return
+  }
+
+  const layer = prepareOverlayCanvas(canvas, edgeLabelContext)
+  if (!layer) {
+    canvas.style.visibility = 'hidden'
+    renderedEdgeLabelCount.value = 0
+    return
+  }
+  const { context, width, height } = layer
+  edgeLabelContext = context
+  context.clearRect(0, 0, width, height)
 
   context.font = '600 11px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
   context.textAlign = 'center'
@@ -555,22 +747,23 @@ const drawMassiveEdgeLabels = () => {
   }
 
   renderedEdgeLabelCount.value = displayed
+  canvas.style.visibility = displayed > 0 ? 'visible' : 'hidden'
 }
 
 const updateRenderedLabelCounts = () => {
   if (!renderer) return
-  if (massiveGraph.value) {
+  if (massiveGraph.value || layoutStatus.value === 'frozen' || !props.layoutEnabled) {
     scheduleMassiveNodeLabels()
-    drawMassiveEdgeLabels()
+    if (massiveGraph.value) drawMassiveEdgeLabels()
+    else renderedEdgeLabelCount.value = renderer.getEdgeDisplayedLabels().size
   } else {
-    renderedNodeLabelCount.value = renderer.getNodeDisplayedLabels().size
+    renderedNodeLabelCount.value = standardNodeLabelsPainted
     renderedEdgeLabelCount.value = renderer.getEdgeDisplayedLabels().size
     nodeLabelStatus.value = 'ready'
   }
 }
 
 const yieldMainThread = () => {
-  if (typeof globalThis.scheduler?.yield === 'function') return globalThis.scheduler.yield()
   return new Promise(resolve => window.setTimeout(resolve, 0))
 }
 
@@ -669,52 +862,106 @@ const stopLayout = ({ kill = false } = {}) => {
     layout.kill()
     layout = null
   }
+  if (!disposed) layoutStatus.value = 'idle'
+}
+
+const freezeLayout = (expectedLayout = layout) => {
+  if (expectedLayout && layout !== expectedLayout) return false
+  clearLayoutTimer()
+  const settledLayout = layout
+  if (settledLayout) {
+    if (layoutRunning) settledLayout.stop()
+    // The final Graphology coordinates remain intact. Killing the supervisor
+    // releases its worker and graph listeners so no late iteration can move
+    // a settled graph; a real topology change creates a fresh supervisor.
+    settledLayout.kill()
+    if (layout === settledLayout) layout = null
+  }
+  layoutRunning = false
+  layoutRemainingMs = 0
+  layoutStatus.value = 'frozen'
+  // Once the topology is frozen, move node names to the collision-aware
+  // overlay. Worker-driven Sigma refreshes can otherwise re-admit its entire
+  // label grid after the final coordinate update.
+  if (renderer?.getSetting('renderLabels') !== false) renderer?.setSetting('renderLabels', false)
+  // Killing the worker preserves its final Graphology coordinates, but its
+  // last message can land between Sigma's indexation and paint phases. Force
+  // one complete reindex so the frozen overlay always reads the settled
+  // coordinates instead of a stale (or freshly-cleared) label frame.
+  renderer?.refresh({ schedule: true })
+  return true
 }
 
 const armLayoutTimer = (duration) => {
   clearLayoutTimer()
-  if (!(duration > 0)) return
+  if (!(duration > 0)) {
+    freezeLayout(layout)
+    return
+  }
   layoutStartedAt = performance.now()
-  layoutTimer = window.setTimeout(() => {
+  const activeLayout = layout
+  const timerId = window.setTimeout(() => {
+    if (layoutTimer !== timerId || layout !== activeLayout) return
     layoutTimer = null
-    layoutRemainingMs = 0
-    if (layoutRunning && layout) layout.stop()
-    layoutRunning = false
-    renderer?.scheduleRender()
+    freezeLayout(activeLayout)
   }, duration)
+  layoutTimer = timerId
+}
+
+const remainingLayoutDuration = () => {
+  if (!layout) return 0
+  if (!layoutRunning) return Math.max(0, layoutRemainingMs)
+  return Math.max(0, layoutRemainingMs - (performance.now() - layoutStartedAt))
 }
 
 const resumeLayout = () => {
   if (!layout || layoutRunning || document.hidden || !props.layoutEnabled || massiveGraph.value) return
+  if (!(layoutRemainingMs > 0)) {
+    freezeLayout(layout)
+    return
+  }
   layout.start()
   layoutRunning = true
+  layoutStatus.value = 'running'
   armLayoutTimer(layoutRemainingMs)
 }
 
 const pauseLayout = () => {
   if (!layoutRunning || !layout) return
-  if (layoutRemainingMs > 0) {
-    layoutRemainingMs = Math.max(0, layoutRemainingMs - (performance.now() - layoutStartedAt))
+  layoutRemainingMs = remainingLayoutDuration()
+  if (!(layoutRemainingMs > 0)) {
+    freezeLayout(layout)
+    return
   }
   clearLayoutTimer()
   layout.stop()
   layoutRunning = false
+  layoutStatus.value = 'paused'
 }
 
-const startLayout = () => {
+const startLayout = (duration = props.layoutDurationMs) => {
   stopLayout({ kill: true })
   if (
     !graph || !ForceAtlas2Layout ||
     !props.layoutEnabled || massiveGraph.value || graph.order < 2
   ) return
 
+  const layoutBudget = Math.max(0, Number(duration) || 0)
+  if (!(layoutBudget > 0)) {
+    layoutRemainingMs = 0
+    layoutStatus.value = 'frozen'
+    if (renderer?.getSetting('renderLabels') !== false) renderer?.setSetting('renderLabels', false)
+    return
+  }
+
   try {
+    clearMassiveNodeLabelWork({ clear: true })
+    if (renderer?.getSetting('renderLabels') !== true) renderer?.setSetting('renderLabels', true)
     const inferred = inferLargeGraphLayoutSettings(graph)
     layout = new ForceAtlas2Layout(graph, {
-      getEdgeWeight: 'layoutWeight',
       settings: { ...inferred, ...props.layoutSettings },
     })
-    layoutRemainingMs = Math.max(0, props.layoutDurationMs)
+    layoutRemainingMs = layoutBudget
     resumeLayout()
   } catch (error) {
     stopLayout({ kill: true })
@@ -765,7 +1012,7 @@ const drawMassiveNodeHover = () => {}
 const runSync = () => {
   if (!graph) return null
   styleRefreshToken += 1
-  const shouldResume = layoutRunning
+  const remainingLayoutMs = remainingLayoutDuration()
   stopLayout({ kill: true })
   const result = syncGraphologyGraph(graph, {
     nodes: props.nodes,
@@ -777,7 +1024,8 @@ const runSync = () => {
   nodeLabelKeysSource = null
   updateRenderState()
   renderer?.refresh()
-  if (result.topologyChanged || shouldResume) startLayout()
+  if (result.topologyChanged) startLayout()
+  else if (remainingLayoutMs > 0) startLayout(remainingLayoutMs)
   return result
 }
 
@@ -797,6 +1045,7 @@ const handleVisibilityChange = () => {
 
 const handleResize = () => {
   if (!renderer) return
+  updateNodeLabelTopInset()
   if (massiveGraph.value) {
     if (resizeTimer !== null) window.clearTimeout(resizeTimer)
     resizeTimer = window.setTimeout(() => {
@@ -814,6 +1063,22 @@ const handleResize = () => {
     // would re-run reducers and rebuild indices for every node and edge.
     renderer?.scheduleRender()
   })
+}
+
+const updateNodeLabelTopInset = () => {
+  const rootRect = container.value?.getBoundingClientRect()
+  const panelHeader = container.value?.closest('.graph-panel')?.querySelector('.panel-header')
+  const headerRect = panelHeader?.getBoundingClientRect()
+  nodeLabelTopInset = rootRect && headerRect
+    ? Math.max(0, Math.ceil(headerRect.bottom - rootRect.top + 4))
+    : 0
+  nodeLabelViewportWidth = Math.max(1, container.value?.clientWidth || 1)
+  nodeLabelViewportHeight = Math.max(1, container.value?.clientHeight || 1)
+}
+
+const prepareStandardNodeLabelFrame = () => {
+  standardNodeLabelBounds = []
+  standardNodeLabelsPainted = 0
 }
 
 const handleMassiveWheel = (event) => {
@@ -955,20 +1220,25 @@ onMounted(async () => {
       shouldEnableNativeEdgeEvents({ edgeCount: graph.size })
 
     renderer = new Sigma(graph, container.value, {
-      ...(massiveGraph.value ? { defaultDrawNodeHover: drawMassiveNodeHover } : {}),
+      defaultDrawNodeLabel: drawDegreeAwareNodeLabel,
+      defaultDrawNodeHover: massiveGraph.value
+        ? drawMassiveNodeHover
+        : drawDegreeAwareNodeHover,
       allowInvalidContainer: true,
       defaultEdgeType: massiveGraph.value ? 'line' : 'arrow',
       enableEdgeEvents: nativeEdgeEventsEnabled,
-      hideEdgesOnMove: true,
+      hideEdgesOnMove: massiveGraph.value || props.edges.length >= 3000,
       hideLabelsOnMove: true,
-      // Entity names are the graph's primary reading surface. Standard WebGL
-      // graphs let Sigma paint every name. Massive graphs use the cooperative
-      // overlay above so 5k+ canvas text calls cannot become one long task.
+      // A spatial label budget keeps topology readable while the worker runs.
+      // The settled collision-aware overlay below considers the complete node
+      // set and progressively reveals different names as the camera zooms.
       renderLabels: !massiveGraph.value,
-      labelDensity: massiveGraph.value ? 0 : Number.POSITIVE_INFINITY,
-      labelGridCellSize: massiveGraph.value ? 170 : 140,
-      labelRenderedSizeThreshold: 0,
-      labelSize: props.nodes.length >= 1000 ? 9 : 11,
+      labelDensity: massiveGraph.value ? 0 : 0.72,
+      labelGridCellSize: massiveGraph.value ? 170 : (props.nodes.length >= 1000 ? 112 : 96),
+      labelRenderedSizeThreshold: 4,
+      labelSize: 12,
+      labelWeight: '500',
+      labelFont: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       minCameraRatio: 0.04,
       maxCameraRatio: 5,
       renderEdgeLabels: !massiveGraph.value && (
@@ -979,6 +1249,7 @@ onMounted(async () => {
       nodeReducer: massiveGraph.value && !needsInteractiveReducers() ? null : nodeReducer,
       edgeReducer: massiveGraph.value && !needsInteractiveReducers() ? null : edgeReducer,
     })
+    updateNodeLabelTopInset()
 
     renderer.on('clickNode', ({ node, event }) => {
       event?.preventSigmaDefault?.()
@@ -1002,6 +1273,7 @@ onMounted(async () => {
       event?.preventSigmaDefault?.()
       emit('select-edge', edge)
     })
+    renderer.on('beforeRender', prepareStandardNodeLabelFrame)
     renderer.on('afterRender', updateRenderedLabelCounts)
     updateRenderedLabelCounts()
     container.value.addEventListener('wheel', handleMassiveWheel, {
