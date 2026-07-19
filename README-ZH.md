@@ -1,22 +1,24 @@
 <div align="center">
 
-<img src="./static/image/BookMiro_logo.png" alt="BookMiro Logo" width="50%"/>
+<a href="https://pageandnode.com">
+  <img src="./frontend/src/assets/logo/PageAndNode_mark.png" alt="PageAndNode 标志" width="260"/>
+</a>
 
-# BookMiro
+# PageAndNode
 
 **把一本书读成会生长的知识图谱。**
 </br>
-<em>上传一本书、一篇论文或一本教材，BookMiro 会把它变成一张会生长的知识图谱，同时保留原始文档的样子。</em>
+<em>上传一本书、一篇论文或一本教材，PageAndNode 会把它变成一张会生长的知识图谱，同时保留原始文档的样子。</em>
 
-[English](./README.md) | [中文文档](./README-ZH.md)
+[官方网站](https://pageandnode.com) | [English](./README.md) | [中文文档](./README-ZH.md)
 
 </div>
 
 ## 概述
 
-**BookMiro** 将书籍和学术文档转化为知识图谱，并与你的阅读进度同步。它不会一次性把整张图谱抛给你，而是只展示你已经读过的部分——因此永远不会剧透后文。
+**PageAndNode** 将书籍和学术文档转化为知识图谱，并与你的阅读进度同步。它不会一次性把整张图谱抛给你，而是只展示你已经读过的部分——因此永远不会剧透后文。
 
-你只需上传一本书、论文或教材（PDF / EPUB / TXT / Markdown），BookMiro 会：
+你只需上传一本书、论文或教材（PDF / EPUB / TXT / Markdown），PageAndNode 会：
 
 - 将其切分为有序章节（识别章节标题，无标题时按固定长度兜底）。
 - 抽取实体（人物、地点、组织、物品、概念）及其关系，并**与原书使用同一种语言**。
@@ -64,7 +66,7 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL_NAME=qwen-plus
 ```
 
-> BookMiro 通过直接调用 LLM 在本地完成图谱抽取，无需第三方图谱服务。
+> PageAndNode 通过直接调用 LLM 在本地完成图谱抽取，无需第三方图谱服务。
 
 #### 2. 安装依赖
 
@@ -119,7 +121,7 @@ Render 部署说明、完整环境变量参考、数据备份说明见 [SELF_HOS
 
 ## 致谢
 
-BookMiro 的灵感来自 **[MiroFish](https://github.com/666ghj/MiroFish)** 的**《红楼梦》demo**——MiroFish 是一款多智能体预测引擎，它曾基于《红楼梦》前 80 回构建的知识图谱推演其失传结局。正是那个 demo 启发了"通过不断演化的人物图谱来阅读一本书"的想法。衷心感谢 MiroFish 团队带来的灵感。
+PageAndNode 的灵感来自 **[MiroFish](https://github.com/666ghj/MiroFish)** 的**《红楼梦》demo**——MiroFish 是一款多智能体预测引擎，它曾基于《红楼梦》前 80 回构建的知识图谱推演其失传结局。正是那个 demo 启发了"通过不断演化的人物图谱来阅读一本书"的想法。衷心感谢 MiroFish 团队带来的灵感。
 
 ## 许可协议
 

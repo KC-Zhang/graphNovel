@@ -31,6 +31,7 @@ export const createQuoteMatcher = (text) => {
   return (quote) => {
     const q = cleanQuote(quote)
     if (!source || !q) return null
+    let bestFallback = null
 
     for (const { stripPunct, norm, map } of lookups) {
       const nq = buildNormalized(q, stripPunct).norm
@@ -41,16 +42,30 @@ export const createQuoteMatcher = (text) => {
         return { start: map[idx], end: map[idx + nq.length - 1] + 1 }
       }
 
-      const probeMax = Math.min(nq.length, 16)
-      for (let len = probeMax; len >= 6; len -= 2) {
-        const probe = nq.slice(0, len)
-        idx = norm.indexOf(probe)
-        if (idx !== -1) {
-          return { start: map[idx], end: map[idx + len - 1] + 1 }
+      if (nq.length < 6) continue
+      const seed = nq.slice(0, 6)
+      let searchFrom = 0
+      while (searchFrom <= norm.length - seed.length) {
+        idx = norm.indexOf(seed, searchFrom)
+        if (idx < 0) break
+        let length = seed.length
+        while (
+          length < nq.length
+          && idx + length < norm.length
+          && norm[idx + length] === nq[length]
+        ) length += 1
+        if (!bestFallback || length > bestFallback.length) {
+          bestFallback = { map, idx, length }
         }
+        searchFrom = idx + 1
       }
     }
-    return null
+    return bestFallback
+      ? {
+          start: bestFallback.map[bestFallback.idx],
+          end: bestFallback.map[bestFallback.idx + bestFallback.length - 1] + 1,
+        }
+      : null
   }
 }
 

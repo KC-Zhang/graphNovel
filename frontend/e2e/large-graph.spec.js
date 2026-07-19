@@ -450,6 +450,8 @@ test.describe('all-chapters large graph performance', () => {
     // Dense graphs keep relationship labels opt-in. The massive renderer uses
     // an independent bounded overlay, so toggling it never starts Sigma's
     // per-frame full-edge scan.
+    await searchInput.press('Escape')
+    await expect(page.locator('.search-results')).toHaveCount(0)
     const edgeLabels = page.locator('.tool-btn').filter({ hasText: /Show Edge Labels|显示关系标签/ })
     await expect(edgeLabels).not.toHaveClass(/active/)
 
@@ -545,9 +547,21 @@ test.describe('all-chapters large graph performance', () => {
     const toolbarStartedAt = Date.now()
     await focusUnread.click()
     await expect(focusUnread).toHaveClass(/active/)
-    await page.locator('.graph-pane .icon-maximize').click()
+    const readerDrawer = page.locator('.graph-pane .reader-drawer-toggle')
+    await expect(readerDrawer).toHaveAttribute('aria-label', /Hide reader|隐藏阅读区/)
+    await expect(readerDrawer.locator('svg')).toHaveAttribute('data-icon', 'chevron-left')
+    await readerDrawer.click()
     await expect(page.locator('.reader-body')).toHaveClass(/graph-maximized/)
-    await page.locator('.graph-pane .icon-maximize').click()
+    await expect(readerDrawer).toHaveAttribute('aria-label', /Show reader|显示阅读区/)
+    await expect(readerDrawer.locator('svg')).toHaveAttribute('data-icon', 'chevron-right')
+    const [drawerBounds, graphBounds] = await Promise.all([
+      readerDrawer.boundingBox(),
+      page.locator('.graph-pane').boundingBox(),
+    ])
+    expect(drawerBounds).toBeTruthy()
+    expect(graphBounds).toBeTruthy()
+    expect(Math.abs(drawerBounds.x - graphBounds.x)).toBeLessThanOrEqual(1)
+    await readerDrawer.click()
     await expect(page.locator('.reader-body')).not.toHaveClass(/graph-maximized/)
     const toolbarMs = Date.now() - toolbarStartedAt
     expect(toolbarMs).toBeLessThan(2_500)

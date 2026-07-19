@@ -1,22 +1,24 @@
 <div align="center">
 
-<img src="./static/image/BookMiro_logo.png" alt="BookMiro Logo" width="50%"/>
+<a href="https://pageandnode.com">
+  <img src="./frontend/src/assets/logo/PageAndNode_mark.png" alt="PageAndNode logo" width="260"/>
+</a>
 
-# BookMiro
+# PageAndNode
 
 **Read a book as a living knowledge graph.**
 </br>
-<em>Upload a book, paper, or textbook, and BookMiro turns it into a living knowledge graph without flattening away the original document.</em>
+<em>Upload a book, paper, or textbook, and PageAndNode turns it into a living knowledge graph without flattening away the original document.</em>
 
-[English](./README.md) | [中文文档](./README-ZH.md)
+[Website](https://pageandnode.com) | [English](./README.md) | [中文文档](./README-ZH.md)
 
 </div>
 
 ## Overview
 
-**BookMiro** converts books and academic documents into knowledge graphs and syncs them to your reading progress. Instead of dumping the whole graph up front, it reveals only what you have already read — so it never spoils what is coming.
+**PageAndNode** converts books and academic documents into knowledge graphs and syncs them to your reading progress. Instead of dumping the whole graph up front, it reveals only what you have already read — so it never spoils what is coming.
 
-You only need to upload a book, paper, or textbook (PDF / EPUB / TXT / Markdown). BookMiro will:
+You only need to upload a book, paper, or textbook (PDF / EPUB / TXT / Markdown). PageAndNode will:
 
 - Split it into ordered episodes (chapters, with a fixed-size fallback).
 - Extract entities (characters, places, organizations, items, concepts) and their relationships, **in the same language as the book**.
@@ -64,7 +66,7 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL_NAME=qwen-plus
 ```
 
-> BookMiro extracts graphs locally via direct LLM calls — no third-party graph service required.
+> PageAndNode extracts graphs locally via direct LLM calls — no third-party graph service required.
 
 #### 2. Install Dependencies
 
@@ -120,7 +122,7 @@ Upload (PDF/EPUB/TXT) -> Split into episodes -> Per-episode LLM extraction (lang
 
 ## Acknowledgements
 
-BookMiro was inspired by the **《红楼梦》 (Dream of the Red Chamber) demo** from **[MiroFish](https://github.com/666ghj/MiroFish)** — a multi-agent prediction engine that, among other things, deduced a lost ending of *Dream of the Red Chamber* from a knowledge graph of the first 80 chapters. That demo sparked the idea of reading any book through its evolving character graph. Many thanks to the MiroFish team for the inspiration.
+PageAndNode was inspired by the **《红楼梦》 (Dream of the Red Chamber) demo** from **[MiroFish](https://github.com/666ghj/MiroFish)** — a multi-agent prediction engine that, among other things, deduced a lost ending of *Dream of the Red Chamber* from a knowledge graph of the first 80 chapters. That demo sparked the idea of reading any book through its evolving character graph. Many thanks to the MiroFish team for the inspiration.
 
 ## License
 

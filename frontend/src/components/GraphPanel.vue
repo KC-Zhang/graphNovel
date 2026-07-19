@@ -2,6 +2,16 @@
   <div class="graph-panel">
     <div class="panel-header">
       <div class="header-left">
+        <button
+          v-if="historyDepth > 0"
+          class="graph-history-back"
+          @click="$emit('navigate-back')"
+          :title="$t('reader.backToPrevious')"
+          :aria-label="$t('reader.backToPrevious')"
+        >
+          <FontAwesomeIcon :icon="faArrowRotateLeft" />
+          <span class="graph-history-depth">{{ historyDepth }}</span>
+        </button>
         <span class="panel-title">{{ $t('graph.panelTitle') }}</span>
         <div class="graph-scope-control" :aria-label="$t('graph.scopeLabel')">
           <button
@@ -65,9 +75,6 @@
             </div>
           </div>
         </div>
-        <button class="tool-btn" @click="$emit('toggle-maximize')" :title="$t('graph.toggleMaximize')">
-          <span class="icon-maximize">⛶</span>
-        </button>
       </div>
     </div>
 
@@ -299,6 +306,7 @@ import * as d3 from 'd3'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 import {
   faBookOpenReader,
+  faArrowRotateLeft,
   faChevronDown,
   faChevronUp,
   faFileLines,
@@ -325,10 +333,11 @@ const props = defineProps({
   seenEdges: { type: Array, default: () => [] },  // 已查看关系 id（节点已读由此派生）
   selectRequest: { type: Object, default: null },  // 外部请求选中 { type, id, nonce }
   latestReadEpisode: { type: Number, default: 0 },
+  historyDepth: { type: Number, default: 0 },
 })
 
 const emit = defineEmits([
-  'toggle-maximize', 'jump',
+  'navigate-back', 'jump',
   'seen-edge', 'set-edge-seen', 'set-graph-scope', 'select-change', 'retry-extraction'
 ])
 
@@ -1449,6 +1458,27 @@ onUnmounted(() => {
 .header-left { pointer-events: auto; display: flex; align-items: center; gap: 14px; min-width: 0; flex-wrap: wrap; }
 .panel-title { font-size: 14px; font-weight: 600; color: #333; white-space: nowrap; }
 .header-tools { pointer-events: auto; display: flex; gap: 10px; align-items: center; }
+.graph-history-back {
+  position: relative;
+  width: 34px; height: 32px; padding: 0; flex: 0 0 auto;
+  border: 1px solid #DADADA; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #FFF; color: #333; cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s;
+}
+.graph-history-back:hover,
+.graph-history-back:focus-visible {
+  background: #FFF3EE; color: #FF4500; border-color: #FF9B78;
+  transform: translateX(-1px);
+}
+.graph-history-depth {
+  position: absolute; top: -7px; right: -7px;
+  min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+  background: #FF4500; color: #FFF; border: 1px solid #FFF;
+  font-size: 10px; line-height: 1; font-weight: 750;
+}
 
 .graph-scope-control {
   display: inline-flex;

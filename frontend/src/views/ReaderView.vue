@@ -157,20 +157,8 @@
       :class="{ 'graph-maximized': graphMaximized, 'single-pane': singlePane, 'showing-graph': activePane === 'graph' }"
       ref="readerBody"
     >
-      <button
-        v-if="navHistory.length"
-        class="floating-reader-back"
-        @click="goBack"
-        :title="$t('reader.back')"
-        :aria-label="$t('reader.back')"
-      >
-        <FontAwesomeIcon :icon="faArrowLeft" />
-        <span class="floating-back-label">{{ $t('reader.back') }}</span>
-        <span class="floating-back-depth">{{ navHistory.length }}</span>
-      </button>
-
       <!-- 左：书籍面板 -->
-      <div v-show="showBookPane" class="book-pane" ref="bookPane" :style="bookPaneStyle">
+      <div id="reader-book-pane" v-show="showBookPane" class="book-pane" ref="bookPane" :style="bookPaneStyle">
         <div class="episode-head">
           <div class="episode-title">{{ currentEpisodeTitle }}</div>
           <div class="episode-head-right">
@@ -204,6 +192,7 @@
               :highlight-text="currentHighlightText"
               :links="episodeLinks"
               @link-click="goToGraph"
+              @page-link-click="onPdfPageLink"
               @rendered="checkAutoRead"
             />
             <p
@@ -292,6 +281,17 @@
 
       <!-- 右：图谱面板 -->
       <div v-show="showGraph" class="graph-pane">
+        <button
+          class="reader-drawer-toggle"
+          type="button"
+          :title="showBookPane ? $t('reader.hideReader') : $t('reader.showReader')"
+          :aria-label="showBookPane ? $t('reader.hideReader') : $t('reader.showReader')"
+          :aria-expanded="showBookPane"
+          aria-controls="reader-book-pane"
+          @click="toggleGraphMaximized"
+        >
+          <FontAwesomeIcon :icon="showBookPane ? faChevronLeft : faChevronRight" />
+        </button>
         <GraphPanel
           :graph-data="graphData"
           :view-episode="viewEpisode"
@@ -302,7 +302,8 @@
           :seen-edges="seenEdgesArr"
           :select-request="selectRequest"
           :latest-read-episode="latestReadEpisode"
-          @toggle-maximize="toggleGraphMaximized"
+          :history-depth="navHistory.length"
+          @navigate-back="goBack"
           @jump="onJump"
           @seen-edge="id => markEdgeSeen(id, true)"
           @set-edge-seen="({ id, value }) => markEdgeSeen(id, value)"
@@ -323,7 +324,7 @@ import {
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
-import { faArrowLeft } from '@fortawesome/free-solid-svg-icons'
+import { faChevronLeft, faChevronRight } from '@fortawesome/free-solid-svg-icons'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import GraphPanel from '../components/GraphPanel.vue'
 import {
@@ -676,6 +677,7 @@ const episodeLinks = computed(() => {
         id: item.id,
         name: item.name,
         quote: item.quote,
+        text: text.slice(range.start, range.end),
         seen: linkSeen(item),
       })
     }
@@ -757,6 +759,13 @@ const scrollToHighlight = () => {
 }
 
 const goHome = () => router.push({ name: 'Home' })
+
+const onPdfPageLink = async ({ pageNumber }) => {
+  const targetEpisode = episodes.value.findIndex(episode => episode.page_number === pageNumber)
+  if (targetEpisode < 0) return
+  pushNavSnapshot()
+  await setViewEpisode(targetEpisode)
+}
 
 const toggleGraphMaximized = () => {
   if (singlePane.value) {
@@ -974,12 +983,18 @@ const onRailPointerDown = (e) => {
 const markCoveredEdges = (el) => {
   const h = el.scrollHeight
   if (!h) return
+  const containerRect = el.getBoundingClientRect()
   const ranges = getEpisodeRanges(viewEpisode.value)
   el.querySelectorAll('.text-link.link-edge, .pdf-text-link.pdf-link-edge').forEach(node => {
     const id = node.getAttribute('data-edge-id')
     if (!id || seenEdges.value.has(id)) return
-    const top = node.offsetTop / h
-    const bottom = (node.offsetTop + node.offsetHeight) / h
+    // PDF annotations are exact inline fragments nested inside absolutely
+    // positioned PDF.js text spans, so offsetTop is relative to that span.
+    // Viewport geometry plus scrollTop gives a stable content-space range for
+    // both PDF fragments and ordinary reflowed reader links.
+    const nodeRect = node.getBoundingClientRect()
+    const top = (nodeRect.top - containerRect.top + el.scrollTop) / h
+    const bottom = (nodeRect.bottom - containerRect.top + el.scrollTop) / h
     if (isRangeCovered(ranges, [top, bottom])) {
       markEdgeSeen(id, true)
     }
@@ -1681,50 +1696,30 @@ onUnmounted(() => {
 /* 阅读主体 */
 .reader-body { position: relative; flex: 1; display: flex; min-height: 0; }
 .reader-body.graph-maximized .graph-pane { flex: 1 1 100%; }
-.floating-reader-back {
-  position: absolute; top: 50%; left: 0; z-index: 45;
-  width: 20px; min-height: 46px; padding: 0; border: none; border-radius: 0 14px 14px 0;
-  display: inline-flex; align-items: center; gap: 8px;
-  justify-content: center; overflow: visible;
-  background: rgba(17,17,17,0.62); color: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.14);
-  cursor: pointer; font-size: 11px; font-weight: 700;
-  transform: translateY(-50%);
-  transition: width 0.16s ease, min-height 0.16s ease, background 0.15s, box-shadow 0.15s, border-radius 0.15s;
-}
-.floating-reader-back:hover,
-.floating-reader-back:focus-visible {
-  width: 82px; min-height: 34px; padding: 0 12px; justify-content: flex-start;
-  border-radius: 0 17px 17px 0; font-size: 13px;
-  background: #111; box-shadow: 0 8px 22px rgba(0,0,0,0.22);
-}
-.floating-reader-back:hover { background: #FF4500; }
-.floating-back-label {
-  max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
-  transition: max-width 0.16s ease, opacity 0.12s ease;
-}
-.floating-reader-back:hover .floating-back-label,
-.floating-reader-back:focus-visible .floating-back-label {
-  max-width: 42px; opacity: 1;
-}
-.floating-back-depth {
-  position: absolute; top: -5px; right: -5px;
-  min-width: 18px; height: 17px; padding: 0 4px; border-radius: 9px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: #FF4500; color: #fff; border: 1px solid #fff;
-  font-size: 10px; line-height: 1; opacity: 0; transform: scale(0.85);
-  transition: opacity 0.12s ease, transform 0.12s ease;
-}
-.floating-reader-back:hover .floating-back-depth,
-.floating-reader-back:focus-visible .floating-back-depth {
-  opacity: 1; transform: scale(1);
-}
 .book-pane {
   width: 46%; min-width: 320px; flex-shrink: 0; display: flex; flex-direction: column;
   min-height: 0;
 }
-.graph-pane { flex: 1; min-width: 0; }
+.graph-pane { position: relative; flex: 1; min-width: 0; }
 .reader-body.single-pane .book-pane,
 .reader-body.single-pane .graph-pane { width: 100%; min-width: 0; flex: 1 1 100%; }
+
+.reader-drawer-toggle {
+  position: absolute; top: 50%; left: 0; z-index: 45;
+  width: 28px; height: 54px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #D7D7D7; border-left: none; border-radius: 0 13px 13px 0;
+  background: rgba(255,255,255,0.96); color: #333;
+  box-shadow: 3px 2px 12px rgba(0,0,0,0.12);
+  cursor: pointer; transform: translateY(-50%);
+  transition: width 0.15s, color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.reader-drawer-toggle:hover,
+.reader-drawer-toggle:focus-visible {
+  width: 32px; color: #FFF; background: #FF4500; border-color: #FF4500;
+  box-shadow: 4px 3px 16px rgba(0,0,0,0.2); outline: none;
+}
+.reader-drawer-toggle svg { font-size: 13px; }
 
 /* 左右分栏拖拽手柄 */
 .pane-resizer {
@@ -1814,11 +1809,17 @@ onUnmounted(() => {
 }
 .text-link.link-unseen:hover { background: rgba(123,45,142,0.22); }
 .text-link.link-unseen.link-edge:hover { background: rgba(233,30,99,0.22); }
-/* 已读：弱化（灰色虚线） */
+/* 已读：仍清楚可见，用较柔和的同色强调区别于未读 */
 .text-link.link-seen {
-  border-bottom: 1px dotted #bbb; color: inherit;
+  border-bottom: 2px solid rgba(123,45,142,0.58);
+  background: rgba(123,45,142,0.07); color: inherit;
 }
-.text-link.link-seen:hover { background: rgba(0,0,0,0.05); }
+.text-link.link-seen.link-edge {
+  border-bottom-color: rgba(233,30,99,0.58);
+  background: rgba(233,30,99,0.07);
+}
+.text-link.link-seen:hover { background: rgba(123,45,142,0.14); }
+.text-link.link-seen.link-edge:hover { background: rgba(233,30,99,0.14); }
 .quote-mark { background: #FFECB3; padding: 1px 2px; border-radius: 3px; box-shadow: 0 0 0 2px #FFECB3; transition: background 0.3s; }
 .quote-mark.flash { animation: quoteFlash 1.6s ease-out; }
 @keyframes quoteFlash {

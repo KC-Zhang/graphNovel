@@ -2,11 +2,13 @@ import { expect, test } from '@playwright/test'
 import { existsSync } from 'node:fs'
 
 const academicPdf = process.env.BOOKMIRO_ACADEMIC_PDF || ''
+let graphFixtureQuotes = ['Agentopia', 'Agentopia']
 
 test.describe('PDF page reading', () => {
   test.skip(!academicPdf || !existsSync(academicPdf), 'Set BOOKMIRO_ACADEMIC_PDF to an academic PDF fixture')
 
   test.beforeEach(async ({ page }) => {
+    graphFixtureQuotes = ['Agentopia', 'Agentopia']
     await page.route('**/api/graph/extract', route => route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -29,7 +31,10 @@ test.describe('PDF page reading', () => {
           nodes: [
             {
               id: 'agentopia', name: 'Agentopia', type: 'Concept', first_episode: 0,
-              mentions: [{ episode: 0, quote: 'Agentopia' }, { episode: 1, quote: 'Agentopia' }],
+              mentions: [
+                { episode: 0, quote: graphFixtureQuotes[0] },
+                { episode: 1, quote: graphFixtureQuotes[1] },
+              ],
             },
             {
               id: 'llm', name: 'LLM', type: 'concept', first_episode: 0,
@@ -70,6 +75,13 @@ test.describe('PDF page reading', () => {
     const projectResponse = await page.request.get(`http://127.0.0.1:5001/api/graph/project/${projectId}`)
     const project = (await projectResponse.json()).data
     expect(project.page_count).toBe(44)
+    const linkEpisodeResponses = await Promise.all([
+      page.request.get(`http://127.0.0.1:5001/api/graph/episode/${projectId}/0`),
+      page.request.get(`http://127.0.0.1:5001/api/graph/episode/${projectId}/1`),
+    ])
+    const linkEpisodes = await Promise.all(linkEpisodeResponses.map(response => response.json()))
+    graphFixtureQuotes = linkEpisodes.map(({ data }) => String(data.text || '').match(/[A-Za-z]{8,}/)?.[0] || '')
+    expect(graphFixtureQuotes.every(Boolean)).toBe(true)
     const previews = page.locator('.chapter-preview-item')
     await expect(previews).toHaveCount(Math.min(30, project.page_count), { timeout: 60_000 })
     await expect(previews.first()).toContainText(/Page 1|第 1 页/)
@@ -78,19 +90,58 @@ test.describe('PDF page reading', () => {
     const canvas = page.locator('.pdf-page-canvas')
     await expect(canvas).toBeVisible({ timeout: 30_000 })
     await expect.poll(async () => canvas.evaluate(el => [el.width, el.height])).not.toEqual([0, 0])
+    await expect.poll(async () => page.locator('.pdf-text-layer').evaluate((layer) => {
+      const layerRect = layer.getBoundingClientRect()
+      const textSpans = [...layer.querySelectorAll('span:not(.pdf-annotation-segment)')]
+        .filter((span) => getComputedStyle(span).position === 'absolute' && span.textContent.trim())
+      return textSpans.every((span) => {
+        const rect = span.getBoundingClientRect()
+        return rect.right <= layerRect.right + 1 && rect.bottom <= layerRect.bottom + 1
+      })
+    })).toBe(true)
+
+    const internalPdfLinks = page.locator('.pdf-native-link.internal')
+    await expect(internalPdfLinks.first()).toBeVisible()
+    const internalTargetPage = Number(await internalPdfLinks.first().getAttribute('data-target-page'))
+    expect(internalTargetPage).toBeGreaterThan(0)
+    await internalPdfLinks.first().click()
+    await expect(page.locator('.episode-title')).toHaveText(`Page ${internalTargetPage}`)
+    const graphHistoryBack = page.locator('.graph-history-back')
+    await expect(graphHistoryBack).toBeVisible()
+    await expect(graphHistoryBack.locator('svg')).toHaveAttribute('data-icon', 'arrow-rotate-left')
+    await graphHistoryBack.click()
+    await expect(page.locator('.episode-title')).toHaveText('Page 1')
 
     await page.locator('.nav-arrow').filter({ hasText: '›' }).click()
     await expect(page.locator('.episode-title')).toContainText(/Page 2|第 2 页/)
     await expect(canvas).toBeVisible()
 
-    const episodeResponse = await page.request.get(`http://127.0.0.1:5001/api/graph/episode/${projectId}/1`)
-    const episode = (await episodeResponse.json()).data
+    const episode = linkEpisodes[1].data
     const searchTerm = String(episode.text || '').match(/[A-Za-z]{7,}/)?.[0]
     expect(searchTerm).toBeTruthy()
     await page.locator('.search-input').fill(searchTerm)
     await expect(page.locator('.search-result.body').first()).toBeVisible({ timeout: 30_000 })
     await page.locator('.search-result.body').first().click()
-    await expect(page.locator('.pdf-text-layer .pdf-quote-mark').first()).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('.pdf-text-layer .pdf-annotation-segment.pdf-quote-mark').first()).toBeVisible({ timeout: 20_000 })
+
+    const agentopiaLink = page.locator('.pdf-annotation-segment.pdf-text-link:not(.pdf-link-edge)')
+      .filter({ hasText: graphFixtureQuotes[1] })
+      .first()
+    await expect(agentopiaLink).toHaveText(graphFixtureQuotes[1])
+    await agentopiaLink.click()
+    await expect(page.locator('.detail-panel .node-name')).toHaveText('Agentopia')
+    await page.locator('.detail-panel .mentions-toggle').click()
+    await page.locator('.detail-panel .book-mentions .mention-item').first().click()
+    const graphJumpMark = page.locator('.pdf-annotation-segment.pdf-quote-mark')
+      .filter({ hasText: graphFixtureQuotes[1] })
+      .first()
+    await expect(graphJumpMark).toBeVisible({ timeout: 20_000 })
+    expect(await graphJumpMark.evaluate((mark) => {
+      const markRect = mark.getBoundingClientRect()
+      const lineRect = mark.parentElement.getBoundingClientRect()
+      return markRect.width < lineRect.width && markRect.right <= lineRect.right + 1
+    })).toBe(true)
+    await page.locator('.detail-panel .detail-close').click()
 
     const reader = page.locator('.book-text')
     await reader.evaluate(el => { el.scrollTop = el.scrollHeight })
@@ -111,6 +162,13 @@ test.describe('PDF page reading', () => {
     await expect(statement).toContainText('LLM')
     await expect(statement.locator('.relationship-arrow')).toBeVisible()
     await expect(statement).toHaveAttribute('aria-label', /Source: Agentopia\. Relationship: enhances\. Target: LLM\./)
+    await expect(agentopiaLink).toHaveClass(/pdf-link-seen/)
+    expect(await agentopiaLink.evaluate((link) => {
+      const style = getComputedStyle(link)
+      return style.backgroundColor !== 'rgba(0, 0, 0, 0)'
+        && style.borderBottomStyle === 'solid'
+        && Number.parseFloat(style.borderBottomWidth) >= 2
+    })).toBe(true)
     const relationshipCenters = async () => {
       const boxes = await Promise.all([
         statement.locator('.endpoint.source').boundingBox(),
@@ -165,7 +223,10 @@ test.describe('PDF page reading', () => {
     expect(noHorizontalOverflow).toBe(true)
     await page.locator('.pane-action').filter({ hasText: /Open graph|打开图谱/ }).click()
     await expect(page.locator('.graph-pane')).toBeVisible()
-    await page.locator('.graph-pane .icon-maximize').click()
+    const showReaderControl = page.locator('.graph-pane .reader-drawer-toggle')
+    await expect(showReaderControl).toHaveAttribute('aria-label', /Show reader|显示阅读区/)
+    await expect(showReaderControl.locator('svg')).toHaveAttribute('data-icon', 'chevron-right')
+    await showReaderControl.click()
     await expect(page.locator('.book-pane')).toBeVisible()
   })
 })

@@ -24,6 +24,17 @@ test('one quote matcher supports multiple mentions in the same chapter', () => {
   assert.equal(text.slice(...Object.values(findQuote('Bob met Alice'))), 'Bob met Alice')
 })
 
+test('quote matcher keeps the longest reliable prefix of a non-verbatim mention', () => {
+  const text = 'The CoSER dataset covers 17,966 characters from 771 renowned books. It provides authentic dialogues.'
+  const quote = 'The CoSER dataset covers 17,966 characters from 771 renowned books. It provides rearranged data.'
+  const range = findQuoteRange(text, quote)
+
+  assert.equal(
+    text.slice(range.start, range.end),
+    'The CoSER dataset covers 17,966 characters from 771 renowned books. It provides',
+  )
+})
+
 test('createMentionIndex groups only revealed mentions by episode', () => {
   const graph = {
     nodes: [

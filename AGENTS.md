@@ -1,4 +1,4 @@
-# BookMiro Agent Notes
+# PageAndNode Agent Notes
 
 This file is a living index for future agents working in this repo. Update it when a feature, incident, or architectural decision materially changes how the app works.
 
@@ -20,6 +20,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - `frontend/src/components/LargeGraphView.vue` - lazy Sigma/WebGL renderer with cooperative hydration, collision-safe semantic-zoom labels, a bounded relationship-label canvas, dense-graph camera input, and bounded/frozen ForceAtlas2 layout.
 - `frontend/src/utils/extractionSchedule.js` - whole-book background extraction target policy.
 - `frontend/src/utils/graphDelta.js` - merges additive episode graph deltas into the reader's current graph snapshot.
+- `frontend/src/utils/pdfAnnotations.js` - PDF.js text-span matching and exact graph-link/highlight annotation planning.
 - `frontend/src/utils/largeGraph.js` - large/massive graph profiles, stable graph keys/positions, cooperative hydration, click-time edge picking, and Graphology synchronization.
 - `locales/en.json`, `locales/zh.json` - UI strings for the reader, graph panel, and operational states.
 - `render.yaml` - Render production deployment blueprint for backend, frontend, disk, and required secrets.
@@ -61,6 +62,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - PDF classification sends at most the first 2000 non-empty extracted characters to the LLM. Textbooks/papers default to page mode, novels to chapter mode, and uncertain results require user selection.
 - PDF page mode keeps one episode per physical page, including image-only pages. Original PDFs are streamed through a project-scoped Range/conditional endpoint for PDF.js.
 - PDF reading mode can change only before graph extraction starts; existing PDF projects are not migrated automatically.
+- PDF page mode renders native internal and safe external PDF link annotations above the PDF.js text layer; internal destinations map physical page numbers back to reader episodes and enter the shared navigation history.
 - The desktop reader stays split and clamps the book pane at 320px; only phone-sized viewports below 640px use the reader/graph single-pane toggle.
 - PDF chapter text is visually reflowed across soft layout line breaks while raw offsets remain unchanged for search and graph mentions.
 - Relationship details read naturally in canonical graph direction as source entity → relationship → target entity. They lay out horizontally in ordinary panels and vertically in narrow panels, while an explicit localized aria label preserves the semantic roles.
@@ -106,8 +108,8 @@ This file is a living index for future agents working in this repo. Update it wh
 - Problem: separate Source / Relationship / Target metadata boxes still made a relationship read like form fields, and earlier arrow placement did not clearly connect the two entities.
  Fix: render only the two entity cards with the relationship phrase above a single arrow between them, keep the canonical source-to-target DOM order, and rotate the flow downward in narrow detail panels.
 
-- Problem: an open relationship detail card could cover the graph-to-reader control after the toolbar wrapped on a phone-width viewport.
- Fix: keep the graph header above detail cards so reader/graph navigation remains reachable at every supported width.
+- Problem: an open relationship detail card could cover graph navigation after the toolbar wrapped on a phone-width viewport.
+ Fix: keep the graph header above detail cards, and keep the reader drawer toggle on the graph pane's left edge above graph overlays.
 
 - Problem: entity types such as `concept`, `Concept`, and whitespace variants appeared as separate legend entries and colors.
  Fix: canonicalize entity-type keys case-insensitively in extraction/load and use the same key for frontend legend, color, and highlighting.
@@ -147,6 +149,12 @@ This file is a living index for future agents working in this repo. Update it wh
 
 - Problem: an attempted hub-spreading optimization replaced the familiar graph structure with a nearly uniform scatter, reduced 1,000+ node labels to 9px, and made neutral links effectively disappear because translucent edge colors were composited with Sigma's premultiplied-alpha blend mode.
  Fix: restore the original unweighted ForceAtlas2 settings and 6.5-second window, use an opaque neutral edge color, keep edges visible while ordinary graphs move, and freeze the exact settled coordinates. Use a compact dense-graph label base, enlarge high-connection nodes with a capped logarithmic curve that does not influence layout, and apply the same damped camera zoom multiplier to both sizes.
+
+- Problem: PDF graph source highlights and text-to-graph links covered whole PDF.js line spans, stretched beyond the printed text, dropped non-verbatim quote matches, and let overlapping relationships overwrite the intended node link.
+ Fix: set the standalone PDF text layer's scale explicitly, map tolerant quote matches back to exact character fragments, reuse the matched episode-text slice, and preserve first-link/node priority across overlaps.
+
+- Problem: read graph links faded to an almost invisible gray dotted line, graph-only mode had no explicit reader-return affordance, the history control floated midway down the whole reader, and native PDF references were inert.
+ Fix: retain softer node/relationship colors for read links, use a bidirectional chevron drawer handle on the graph pane's left edge to hide/show the reader, move history to the graph header with a curved jump-back icon, and render PDF link annotations with physical-page navigation.
 
 ## Release Note System
 
