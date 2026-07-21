@@ -318,7 +318,12 @@ import {
   graphDensityMessage,
   shouldAutoHideEdgeLabels,
 } from '../utils/graphPerformance'
-import { GRAPH_SCOPES, normalizeGraphScope, scopeAllowsMention } from '../utils/readerLinks'
+import {
+  DEFAULT_GRAPH_SCOPE,
+  GRAPH_SCOPES,
+  normalizeGraphScope,
+  scopeAllowsMention,
+} from '../utils/readerLinks'
 import { colorForEntityType, entityTypeKey, groupEntityTypes } from '../utils/entityTypes'
 import LargeGraphView from './LargeGraphView.vue'
 import { shouldUseLargeGraphRenderer, shouldUseMassiveGraphProfile } from '../utils/largeGraph'
@@ -326,7 +331,7 @@ import { shouldUseLargeGraphRenderer, shouldUseMassiveGraphProfile } from '../ut
 const props = defineProps({
   graphData: Object,        // { nodes, edges }
   viewEpisode: Number,      // 当前正在阅读的章节（本章视图）
-  graphScope: { type: String, default: GRAPH_SCOPES.UPTO },
+  graphScope: { type: String, default: DEFAULT_GRAPH_SCOPE },
   episodes: Array,          // 章节元数据（用于标题）
   loading: Boolean,
   extractProgress: { type: Object, default: null },

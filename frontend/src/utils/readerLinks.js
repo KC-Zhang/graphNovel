@@ -77,6 +77,8 @@ export const GRAPH_SCOPES = Object.freeze({
   ALL: 'all',
 })
 
+export const DEFAULT_GRAPH_SCOPE = GRAPH_SCOPES.UPTO
+
 export const normalizeGraphScope = (scope) => (
   Object.values(GRAPH_SCOPES).includes(scope) ? scope : GRAPH_SCOPES.UPTO
 )

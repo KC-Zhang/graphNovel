@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  DEFAULT_GRAPH_SCOPE,
   GRAPH_SCOPES,
   createQuoteMatcher,
   createMentionIndex,
@@ -9,6 +10,10 @@ import {
   scopeEpisodeLimit,
   shouldMarkLinkRead,
 } from '../src/utils/readerLinks.js'
+
+test('graph defaults to cumulative scope through the current chapter', () => {
+  assert.equal(DEFAULT_GRAPH_SCOPE, GRAPH_SCOPES.UPTO)
+})
 
 test('findQuoteRange tolerates whitespace and punctuation differences', () => {
   const text = 'Alice said: "Never eat alone." Then Bob nodded.'

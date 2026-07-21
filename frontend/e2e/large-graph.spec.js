@@ -377,15 +377,15 @@ test.describe('all-chapters large graph performance', () => {
 
     // The default scope is deliberately a small SVG subgraph even though the
     // loaded book already contains the complete all-chapters graph.
-    const currentScope = page.getByRole('button', { name: /Current chapter|仅当前章节/ })
-    await expect(currentScope).toHaveClass(/active/)
+    const cumulativeScope = page.getByRole('button', { name: /Up to current chapter|直到当前章节/ })
+    await expect(cumulativeScope).toHaveClass(/active/)
     await expect(page.locator('.graph-svg')).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.graph-node')).toHaveCount(CURRENT_NODE_COUNT)
     await expect(page.locator('.graph-link')).toHaveCount(CURRENT_EDGE_COUNT)
     await expect(page.locator('.large-graph-view')).toHaveCount(0)
     expect(graphRequestCount).toBe(1)
 
-    // Measure the user-visible Current -> All transition. A 16 ms heartbeat
+    // Measure the user-visible cumulative -> All transition. A 16 ms heartbeat
     // records main-thread stalls while Vue reconciles scope, WebGL imports,
     // Graphology syncs 25k records, and Sigma paints its first frame.
     await resetHeartbeat(page)

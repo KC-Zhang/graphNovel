@@ -334,6 +334,7 @@ import {
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import { useReadingProgress } from '../composables/useReadingProgress'
 import {
+  DEFAULT_GRAPH_SCOPE,
   GRAPH_SCOPES,
   createMentionIndex,
   createQuoteMatcher,
@@ -584,7 +585,7 @@ const extractRunning = ref(false)
 const extractError = ref('')
 const extractRetrying = ref(false)
 const initialGraphLoading = ref(false)
-const graphScope = ref(GRAPH_SCOPES.CURRENT)
+const graphScope = ref(DEFAULT_GRAPH_SCOPE)
 const graphScopeLimit = computed(() => scopeEpisodeLimit({
   scope: graphScope.value,
   viewEpisode: viewEpisode.value,
@@ -599,8 +600,8 @@ const graphLoading = computed(() =>
   initialGraphLoading.value || graphScopeLimit.value > extractedUpto.value
 )
 // Extraction is sequential server-side. Request the whole book immediately so
-// later chapters and the all-book scope stay warm; CURRENT still limits what is
-// displayed and graph/data still transfers incremental revisions.
+// later chapters and the all-book scope stay warm; the cumulative default still
+// limits display to the current chapter boundary while graph/data sends deltas.
 const desiredExtractUpto = computed(() => fullBookExtractionTarget(episodes.value.length))
 const extractProgress = computed(() => {
   const total = episodes.value.length

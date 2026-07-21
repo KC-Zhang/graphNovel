@@ -66,7 +66,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - The desktop reader stays split and clamps the book pane at 320px; only phone-sized viewports below 640px use the reader/graph single-pane toggle.
 - PDF chapter text is visually reflowed across soft layout line breaks while raw offsets remain unchanged for search and graph mentions.
 - Relationship details read naturally in canonical graph direction as source entity → relationship → target entity. They lay out horizontally in ordinary panels and vertically in narrow panels, while an explicit localized aria label preserves the semantic roles.
-- The default graph scope is the current chapter, but sequential extraction is scheduled through the whole book immediately. A smaller target does not make chapter zero finish sooner and leaves later scopes cold.
+- The default graph scope is cumulative through the current chapter, while sequential extraction is scheduled through the whole book immediately. Users can still switch to the current chapter alone or the complete book.
 - Graph delta clients send `since_episode`; the API returns `revision_episode`, total counts, and either `mode: full` or `mode: delta`. Nodes and edges persist `last_episode` so metadata-only updates are not lost.
 - Server text search is literal, capped at 300 results, and returns UTF-16 offsets compatible with browser text selections.
 - Graphs switch from D3/SVG to lazy Sigma/WebGL at 500 visible nodes or 1,000 visible edges. Sigma paints deterministic positions first; below the massive threshold, ForceAtlas2 then loads and runs in a worker for a bounded layout window.
@@ -133,7 +133,7 @@ This file is a living index for future agents working in this repo. Update it wh
  Fix: use bounded server search, a 20-episode text LRU, and revisioned graph delta responses.
 
 - Problem: the performance release made graph loading feel slower by waiting for the initial full graph before mounting the reader, deferring extraction after the first three episodes, and bootstrapping layout before the first WebGL frame.
- Fix: mount the reader immediately after metadata, fetch graph and episode concurrently, restore whole-book background extraction, paint Sigma before loading the layout worker, and keep CURRENT scope plus delta transfer to bound render work.
+ Fix: mount the reader immediately after metadata, fetch graph and episode concurrently, restore whole-book background extraction, paint Sigma before loading the layout worker, and keep cumulative-to-current scope plus delta transfer to bound render work.
 
 - Problem: extraction status advances in memory just before `graph.json` and the project revision are persisted, so the reader could mark the final status as loaded while still holding the previous graph snapshot.
  Fix: compare status against the `revision_episode` confirmed by `/graph/data`, continue polling until they match, and coalesce concurrent initial/poll graph requests.
@@ -182,7 +182,7 @@ This file is a living index for future agents working in this repo. Update it wh
 - Add backend tests for extraction fallback behavior without hitting real networks.
 - Run `cd frontend && npm test`, `cd frontend && npm run build`, and `cd frontend && npm run test:bundle` after reader or graph UI changes.
 - Run `cd frontend && BOOKMIRO_ACADEMIC_PDF=/path/to/paper.pdf npm run test:e2e` for the PDF page-reading browser acceptance loop.
-- Keep the large-graph Playwright scenario passing; it uses a self-contained 12-chapter fixture with 5,000 nodes and 20,000 edges, starts in the 96-node/240-edge Current scope, then measures the real All Chapters transition.
+- Keep the large-graph Playwright scenario passing; it uses a self-contained 12-chapter fixture with 5,000 nodes and 20,000 edges, starts in the 96-node/240-edge cumulative-to-current scope, then measures the real All Chapters transition.
 - Keep the standard-WebGL layout scenario passing; its 600-node/1,200-edge fixture verifies visible relationship draws during layout, a final frozen coordinate map, collision-free in-bounds labels, compact 12px ordinary-node type, hub emphasis, semantic zoom, and a sub-500ms main-thread heartbeat gap.
 - The large-graph acceptance test must keep the reader usable while `/graph/data` is held, issue only one initial graph request, preserve exact All counts, become WebGL-ready within 3 seconds, accept search within 1 second, keep the one-time 5k/20k WebGL allocation gap below 550 ms (blocked portion below 535 ms), keep post-interaction gaps below 500 ms, and keep its 12-wheel burst below 1 second.
 - At the 5,000-node/20,000-edge fixture size, the settled overview must report a non-empty, bounded, unique node-label set rather than all 5,000 overlapping names. The massive relationship overlay must remain capped at 36, toggle in under 1 second without a heartbeat gap above 500 ms, and keep a searched/selected relationship labelled while the global toggle is off.
